@@ -1,0 +1,47 @@
+evidence_id: ev_4848f9c85750e19d0335b1f23b67c213835626771579de178f0133dbe653449b
+subject:
+  name: p4_guest_vgpu_535_slice.o
+  digest:
+    sha256: fc1f421400121784521cda52912dc6763b5fc271f634ad65ce0257f5cfd82e56
+  local_path: /home/zero/vgpu-work/p4_guest_vgpu_535_slice.o
+  format: file
+  architecture: null
+provider:
+  id: byte-entropy
+  name: REA byte entropy
+  version: "1"
+analysis_profile: null
+predicate_type: rea.analysis
+operation: inspect_byte_entropy
+parameters:
+  path: /home/zero/vgpu-work/p4_guest_vgpu_535_slice.o
+  block_size: 4096
+  offset: 0
+raw_result: null
+normalized_result:
+  artifact:
+    path: /home/zero/vgpu-work/p4_guest_vgpu_535_slice.o
+    bytes: 6576
+    sha256: fc1f421400121784521cda52912dc6763b5fc271f634ad65ce0257f5cfd82e56
+  block_size: 4096
+  window:
+    offset: 0
+    length: 6576
+  file_entropy: 5.3246
+  thresholds:
+    high: 7.2
+    low: 1
+  blocks[2]{offset,length,entropy}:
+    0,4096,5.484
+    4096,2480,4.8384
+  runs: []
+  limitations[3]: Entropy does not prove encryption; compressed and encrypted bytes cannot be distinguished by this measure.,Entropy is rounded to four decimal places; thresholds classify those reported values. Small blocks can underestimate entropy.,The file-wide hash and entropy cover the entire file; blocks and runs cover only the selected window. Empty input has entropy 0 by convention.
+confidence: observed
+authority: shipped-artifact
+environment: null
+limitations[3]: Entropy does not prove encryption; compressed and encrypted bytes cannot be distinguished by this measure.,Entropy is rounded to four decimal places; thresholds classify those reported values. Small blocks can underestimate entropy.,The file-wide hash and entropy cover the entire file; blocks and runs cover only the selected window. Empty input has entropy 0 by convention.
+relationship_coverage: null
+locations[1]{kind,path}:
+  artifact-path,/home/zero/vgpu-work/p4_guest_vgpu_535_slice.o
+evidence_links: []
+caller_input_path: p4_guest_vgpu_535_slice.o

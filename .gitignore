@@ -1,0 +1,42 @@
+# Proprietary blobs and extracted vendor payloads (never commit NVIDIA binaries)
+blobs/
+firmware-blobs/**/*.bin
+firmware-blobs/**/*.rom
+firmware-blobs/**/*.raw
+firmware-blobs/gp104-vgpu-535/acr/
+firmware-blobs/gp104-vgpu-535/gr/
+firmware-blobs/gp104-vgpu-535/nvdec/
+firmware-blobs/gp104-vgpu-535/nvenc/
+firmware-blobs/gp104-vgpu-535/pmu/
+firmware-blobs/gp104-vgpu-535/sec2/
+*.run
+*.o_binary
+*.so
+*.so.*
+*.exe
+*.deb
+*.rpm
+*.tgz
+*.tar.gz
+
+# Kernel / C build outputs
+*.o
+*.ko
+*.ko.*
+*.mod
+*.mod.c
+*.cmd
+*.ver
+*.order
+Module.symvers
+.tmp_versions/
+test_guest_ioctl
+
+# Rust / Python artifacts
+nova-vgpu/target/
+target/
+__pycache__/
+*.py[cod]
+dist/
+build/
+.cache/
