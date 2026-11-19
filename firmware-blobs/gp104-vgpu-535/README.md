@@ -5,7 +5,7 @@ This directory holds the signed NVIDIA Falcon firmware binaries extracted from `
 ## Key Finding
 
 Pascal vGPU (`535.309.01`) does **not** use separate vGPU-specific Falcon firmware:
-- `acr/gp104_acr_bl`, `pmu/gp104_pmu_bl`, `sec2/gp104_sec2_rtos`, `sec2/gp104_sec2_hs`, `nvenc/gp104_nvenc_hs_scrub`, `gr/gp104_fecs_*`, `gr/gp104_gpccs_*`, and `gr/gp104_gr_netlist.bin` (`90,552` B, `Jun 28 2019`) are **SHA-256 identical** to the R580 (`580.178.04`) blobs in [`../gp104/`](../firmware-blobs/gp104/BLOB_MANIFEST.json).
+- `acr/gp104_acr_bl`, `pmu/gp104_pmu_bl`, `sec2/gp104_sec2_rtos`, `sec2/gp104_sec2_hs`, `nvenc/gp104_nvenc_hs_scrub`, `gr/gp104_fecs_*`, `gr/gp104_gpccs_*`, and `gr/gp104_gr_netlist.bin` (`90,552` B, `Jun 28 2019`) are **SHA-256 identical** to the R580 (`580.178.04`) blobs in [`../gp104/`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/firmware-blobs/gp104/BLOB_MANIFEST.json).
 - `pmu/gp104_pmu_rtos` (`294,400` B), `nvenc/gp104_nvenc0/1_ucode` (`230,912` B), and `nvdec/gp104_nvdec_ucode` (`110,080` B) are 535-branch signed builds carrying valid `192`-byte `LsfSigInfo` footers (`fid=0`, `fid=4`, `fid=5`).
 
-See [`BLOB_MANIFEST.json`](../firmware-blobs/gp104-vgpu-535/BLOB_MANIFEST.json) for full SHA-256 digests and `.rodata` offsets, and [`../../docs/08-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md`](../docs/08-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md) for full analysis.
+See [`BLOB_MANIFEST.json`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/firmware-blobs/gp104-vgpu-535/BLOB_MANIFEST.json) for full SHA-256 digests and `.rodata` offsets, and [`../../docs/08-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/docs/08-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md) for full analysis.
