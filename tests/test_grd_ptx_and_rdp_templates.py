@@ -64,7 +64,7 @@ class TestGrdPtxRdpAndScripts(unittest.TestCase):
             self.assertNotIn("password 51:", text.lower(), f"Password hash found in {f.name}")
             self.assertIn("connection type:i:6", text, f"Missing LAN profile in {f.name}")
             self.assertIn("session bpp:i:32", text, f"Missing 32-bit color in {f.name}")
-            self.assertIn("dynamic resolution:i:1", text, f"Missing dynamic resolution in {f.name}")
+            self.assertIn("smart sizing:i:1", text, f"Missing smart sizing in {f.name}")
             self.assertIn(":3389", text, f"Missing RDP port in {f.name}")
 
     def test_selkies_pixelflux_10bit_444_compose_config(self):
