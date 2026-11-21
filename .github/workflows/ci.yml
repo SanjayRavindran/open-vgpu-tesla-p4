@@ -41,10 +41,11 @@ jobs:
           cargo test --all-targets --verbose
           cargo build --bins --verbose
 
-      - name: Build & Test Open C Daemons (libopen-vgxcfg & open-xid-logd)
+      - name: Build & Test Open C Daemons (libopen-vgxcfg, open-xid-logd, open-vgpu-mgr)
         run: |
           make -C open-vgxcfg clean all test clean
           make -C open-xid-logd clean all test clean
+          make -C open-vgpu-mgr clean all test clean
 
       - name: Build Guest C Smoke Binary & Check Kmod Syntax
         run: |

@@ -30,6 +30,11 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             "nvidia-xid-logd.exports.json",
             "nvidia-xid-logd.exposure.json",
             "nvidia-xid-logd.layout.json",
+            "nvidia-vgpu-mgr.analyze.json",
+            "nvidia-vgpu-mgr.decompile.json",
+            "nvidia-vgpu-mgr.exports.json",
+            "nvidia-vgpu-mgr.exposure.json",
+            "nvidia-vgpu-mgr.layout.json",
         ]
         for fn in expected:
             p = ev_dir / fn
@@ -48,6 +53,14 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-xid-logd" / "mock_nvml.c",
             ROOT / "open-xid-logd" / "test_xid_logd.sh",
             ROOT / "open-xid-logd" / "Makefile",
+            ROOT / "open-vgpu-mgr" / "nv_vgpu_vfio_abi.h",
+            ROOT / "open-vgpu-mgr" / "rm_client.h",
+            ROOT / "open-vgpu-mgr" / "rm_client.c",
+            ROOT / "open-vgpu-mgr" / "vmiop_env.h",
+            ROOT / "open-vgpu-mgr" / "vmiop_env.c",
+            ROOT / "open-vgpu-mgr" / "open_vgpu_mgr.c",
+            ROOT / "open-vgpu-mgr" / "test_vgpu_mgr_unit.c",
+            ROOT / "open-vgpu-mgr" / "Makefile",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
             ROOT / "nova-vgpu" / "src" / "bin" / "open_nvidia_vgpud.rs",
         ]

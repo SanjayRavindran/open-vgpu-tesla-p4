@@ -5,13 +5,14 @@ set -euo pipefail
 #   - Ubuntu 24.04 / 26.04 KVM hosts
 #   - Proxmox VE 8 / 9 hosts
 # Packages nvidia.ko + nvidia-vgpu-vfio.ko under DKMS and installs our clean-room
-# open-source host daemons (open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd)
-# alongside the proven stable vgpu-mgr/libnvidia-vgpu/nvidia-smi host components.
+# open-source host daemons (open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd,
+# open-nvidia-vgpu-mgr) alongside the proven stable libnvidia-vgpu/nvidia-smi host components.
 
 RUN_FILE=""
 OPEN_VGPUD=""
 OPEN_VGXCFG=""
 OPEN_XID_LOGD=""
+OPEN_VGPU_MGR=""
 SKIP_BUILD_OPEN=0
 DRY_RUN=0
 
@@ -24,6 +25,7 @@ Options:
   --open-vgpud <path>     Prebuilt open-nvidia-vgpud binary (optional; auto-built if cargo present)
   --open-vgxcfg <path>    Prebuilt libopen-vgxcfg.so library (optional; auto-built if gcc present)
   --open-xid-logd <path>  Prebuilt open-nvidia-xid-logd binary (optional; auto-built if gcc present)
+  --open-vgpu-mgr <path>  Prebuilt open-nvidia-vgpu-mgr binary (optional; auto-built if gcc present)
   --skip-build-open       Do not invoke cargo/gcc to build missing open daemons
   --dry-run               Print exact planned actions without modifying the system
   -h, --help              Show this help text
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --open-vgpud) OPEN_VGPUD="${2:-}"; shift 2 ;;
     --open-vgxcfg) OPEN_VGXCFG="${2:-}"; shift 2 ;;
     --open-xid-logd) OPEN_XID_LOGD="${2:-}"; shift 2 ;;
+    --open-vgpu-mgr) OPEN_VGPU_MGR="${2:-}"; shift 2 ;;
     --skip-build-open) SKIP_BUILD_OPEN=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -108,12 +111,16 @@ if [ "$SKIP_BUILD_OPEN" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     make -C "$REPO_ROOT/open-xid-logd" all
     OPEN_XID_LOGD="$REPO_ROOT/open-xid-logd/open-nvidia-xid-logd"
   fi
+  if [ -z "$OPEN_VGPU_MGR" ] && [ -f "$REPO_ROOT/open-vgpu-mgr/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+    make -C "$REPO_ROOT/open-vgpu-mgr" all
+    OPEN_VGPU_MGR="$REPO_ROOT/open-vgpu-mgr/open-nvidia-vgpu-mgr"
+  fi
 else
-  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd"
+  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd, open-nvidia-vgpu-mgr"
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
-  for req_bin in "$OPEN_VGPUD" "$OPEN_VGXCFG" "$OPEN_XID_LOGD"; do
+  for req_bin in "$OPEN_VGPUD" "$OPEN_VGXCFG" "$OPEN_XID_LOGD" "$OPEN_VGPU_MGR"; do
     if [ -z "$req_bin" ] || [ ! -f "$req_bin" ]; then
       echo "Missing open-source host daemon artifact ($req_bin). Pass --open-* or install cargo+gcc." >&2
       exit 1
@@ -170,12 +177,12 @@ depmod -a "$KVER"
 mkdir -p "${OPT_DIR}/lib" /usr/share/nvidia/vgpu /usr/share/nvidia/vgx
 install -m 0755 "$OPEN_VGPUD" "${OPT_DIR}/nvidia-vgpud"
 install -m 0755 "$OPEN_XID_LOGD" "${OPT_DIR}/nvidia-xid-logd"
+install -m 0755 "$OPEN_VGPU_MGR" "${OPT_DIR}/nvidia-vgpu-mgr"
 install -m 0755 "$OPEN_VGXCFG" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.${PKG_VER}"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.1"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so"
 
-# Retain stable vgpu-mgr, vmiop plugin, nvidia-smi, and NVML from .run
-install -m 0755 "$TMP_EXTRACT/pkg/nvidia-vgpu-mgr" "${OPT_DIR}/nvidia-vgpu-mgr"
+# Retain stable vmiop plugin, nvidia-smi, and NVML from .run
 install -m 0755 "$TMP_EXTRACT/pkg/nvidia-smi" "${OPT_DIR}/nvidia-smi"
 install -m 0755 "$TMP_EXTRACT/pkg/libnvidia-vgpu.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgpu.so.${PKG_VER}"
 ln -sf "libnvidia-vgpu.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgpu.so.1"

@@ -6,9 +6,9 @@ This document visualizes how clean-room open-source components, upstream open-so
 
 | Class | Meaning | Examples |
 | :--- | :--- | :--- |
-| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), provisioning & PTX patch scripts |
+| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), `open-nvidia-vgpu-mgr` (C), provisioning & PTX patch scripts |
 | Blue | **Upstream Open Source** | Linux KVM/VFIO/mdev, QEMU/OVMF/`swtpm`, FastAPI-DLS, GNOME 49.5, FreeRDP, Docker/Selkies, NVIDIA MIT/GPL kernel shims & R620 Wayland shims |
-| Red / Orange | **Closed Source (NVIDIA Proprietary)** | `nv-kernel.o_binary`, `nvidia-vgpu-mgr`, `libnvidia-vgpu.so`, signed Falcon blobs (`PrivSec=1`), Guest `nvlddmkm.sys` & `libcuda` |
+| Red / Orange | **Closed Source (NVIDIA Proprietary)** | `nv-kernel.o_binary`, `libnvidia-vgpu.so`, signed Falcon blobs (`PrivSec=1`), Guest `nvlddmkm.sys` & `libcuda` |
 | Slate | **Closed Source OS / Client** | Windows 11 24H2 Kernel, DWM, `TermService` (`:3389`) |
 
 ---
@@ -27,7 +27,8 @@ flowchart TB
         VGPUD["open-nvidia-vgpud (Rust, GPL-2.0): RM profile registrar"]:::ours
         VGXCFG["libopen-vgxcfg.so (C, 9 vgxConfig* exports, 0 diff vs NVIDIA)"]:::ours
         XID["open-nvidia-xid-logd (C, dlopen NVML + 76-char Base64 dump)"]:::ours
-        MGR["nvidia-vgpu-mgr + libnvidia-vgpu.so.535.309.01 (50/50 scheduler & VRPC)"]:::closed
+        MGR["open-nvidia-vgpu-mgr (C, 60 vmiop* exports & worker runtime)"]:::ours
+        VMIOP_SO["libnvidia-vgpu.so.535.309.01 (Closed vmiop 50/50 scheduler & VRPC plugin)"]:::closed
         SMI["nvidia-smi + libnvidia-ml.so.535.309.01 (telemetry ABI lock)"]:::closed
         DLS["FastAPI-DLS v2 (:443, Docker or systemd venv)"]:::oss
         FAN["h61-fan-control (Python PWM >= 60C thermal loop)"]:::ours
@@ -59,6 +60,7 @@ flowchart TB
     VGPU_VFIO --> SYSFS
 
     MGR <-- "/dev/nvidia-vgpu* & vmiop RPC" --> VGPU_VFIO
+    MGR <-- "dlvsym VER_5_0 / VER_2_0 & vmiop_* ABI" --> VMIOP_SO
     MGR -. "reads vgxConfig* if queried" .-> VGXCFG
     XID -- "dlopen libnvidia-ml.so.1" --> SMI
     SMI -- "RM NVML ioctl" --> NV_SHIM
@@ -176,7 +178,7 @@ flowchart TB
 sequenceDiagram
     participant vgpud as "open-nvidia-vgpud (Open Rust)"
     participant nvko as "Host nvidia.ko + nvidia-vgpu-vfio.ko (DKMS)"
-    participant mgr as "Host nvidia-vgpu-mgr (Closed)"
+    participant mgr as "Host open-nvidia-vgpu-mgr (Open C) + libnvidia-vgpu.so (Closed)"
     participant qemu as "QEMU/KVM + VFIO mdev"
     participant guest as "Guest Driver (Alma R535/R620 or Win11 539.72)"
     participant dls as "Host FastAPI-DLS (:443, Open)"
@@ -203,10 +205,11 @@ sequenceDiagram
 | `open-nvidia-vgpud` | Host Userspace | **Ours** | Open (Rust, GPL-2.0) | Parses `vgpuConfig.xml`, expands license strings, registers 12 Tesla P4 types in RM |
 | `libopen-vgxcfg.so` | Host Userspace | **Ours** | Open (C, 0-diff parity) | Exports all 9 `vgxConfig*` XML query functions |
 | `open-nvidia-xid-logd` | Host Userspace | **Ours** | Open (C) | Monitors NVML XID events cleanly via `dlopen`, logs 76-char Base64 dumps |
+| `open-nvidia-vgpu-mgr` | Host Userspace | **Ours** | Open (C, 60 `vmiop*` exports) | Binds `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d`, forks per-VM `vgpu` workers, hosts `vmiop-env` ABI |
 | `FastAPI-DLS` | Host Service | Upstream Open | Open (Python/Docker/systemd) | Issues TLS licensing tokens & leases (`192.168.1.24:443`) |
 | `nvidia-vgpu-vfio.ko` | Host Kernel | NVIDIA / DKMS | Open (MIT C) | KVM/VFIO `mdev` lifecycle and BAR0/VRPC trap forwarding |
 | `nvidia.ko` (`nv-kernel.o_binary`) | Host Kernel | NVIDIA Proprietary | Open OS shim + Closed core | Hardware initialization, signed Falcon execution, channel scheduling |
-| `nvidia-vgpu-mgr` / `libnvidia-vgpu.so` | Host Userspace | NVIDIA Proprietary | Closed binary (retained) | Production `vmiop` 50/50 multi-VM mediation & VRAM/channel virtualization |
+| `libnvidia-vgpu.so` | Host Userspace | NVIDIA Proprietary | Closed `.so` plugin (retained) | Loaded by `open-nvidia-vgpu-mgr` for `vmiop` 50/50 multi-VM mediation & VRAM/channel virtualization |
 | `nvidia-smi` / `libnvidia-ml.so` | Host Userspace | NVIDIA Proprietary | Closed binary (retained) | Version-matched `535.309.01` telemetry |
 | AlmaLinux `535` + `620` Stack | Linux Guest | Hybrid | Open R620 EGL/DRM + Closed R535 | Pure Wayland GNOME 49.5 + GTK4 (`ngl`) + CUDA PTX patched RDP + Selkies |
 | Windows 11 `539.72 WHQL` Stack | Windows Guest | Closed + Open scripts | Closed WDDM + Open `.ps1`/XML | WDDM 3.1 DX12/CUDA/NVENC + policy-fixed RDP `:3389` without `0x200d` |

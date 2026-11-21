@@ -15,9 +15,10 @@ To maximize open-source transparency without destabilizing live VM GPU virtualiz
 | **`open-nvidia-vgpud`** | **Replaced (Open)** | Rust / GPL-2.0 (`nova-vgpu`) | Parses `/usr/share/nvidia/vgpu/vgpuConfig.xml`, queries RM PCI IDs/mode, pushes all `NVA081` (`0xa0810101`) vGPU profile definitions and `NOTIFY_START` (`0xa0810109`) to `/dev/nvidiactl` |
 | **`libopen-vgxcfg.so`** | **Replaced (Open)** | C (`open-vgxcfg`) | Self-contained XML DOM parser exporting all 9 ABI-exact `vgxConfig*` functions (`soname libnvidia-vgxcfg.so.1`) |
 | **`open-nvidia-xid-logd`** | **Replaced (Open)** | C (`open-xid-logd`) | Daemonizes, locks `$RUNTIME_DIRECTORY/nvidia-xid-logd.pid`, dynamically loads `libnvidia-ml.so.1`, exits cleanly (`0`) on non-GSP GPUs (`NVML_ERROR_NOT_SUPPORTED`), or logs 76-char Base64 `nvidia-debugdump` XID reports on GSP GPUs |
+| **`open-nvidia-vgpu-mgr`** | **Replaced (Open)** | C (`open-vgpu-mgr`) | Full KVM/VFIO `vmiop-env` runtime daemon: binds `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d`, forks per-VM `vgpu` worker processes, manages `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), and exports all `60` dynamic `vmiop_*` symbols + `vmiop_presentation` to `libnvidia-vgpu.so` |
 | **`nvidia-vgpu-vfio.ko`** | **Open (DKMS)** | C / MIT (`535.309.01`) | Packaged alongside `nvidia.ko` in `/usr/src/nvidia-vgpu-kvm-535.309.01` for automatic rebuilds across Ubuntu & Proxmox kernels |
 | **`nvidia.ko`** (`nv-kernel.o_binary`) | Retained (Stable) | Proprietary kernel core | Handles Pascal Falcon signed blobs (`ACR`, `PMU`, `SEC2`, `FECS`) and RM IOCTL dispatch |
-| **`nvidia-vgpu-mgr`** & **`libnvidia-vgpu.so.535.309.01`** | Retained (Stable) | Proprietary `vmiop` plugin | Provides proven, production-stable 50/50 multi-VM scheduler, BAR0/VRPC mediation, and Win11/AlmaLinux 10 runtime stability |
+| **`libnvidia-vgpu.so.535.309.01`** | Retained (Stable) | Proprietary `vmiop` plugin | Loaded dynamically by `open-nvidia-vgpu-mgr` (`vmiop_display_vmiop_plugin@@VER_5_0`) for 50/50 multi-VM BAR0/VRPC mediation |
 | **`nvidia-smi`** & **`libnvidia-ml.so.535.309.01`** | Retained (Stable) | Proprietary management | Version-locked `535.309.01` telemetry (`API mismatch` prevention) |
 
 ---
@@ -71,9 +72,25 @@ Implemented in [`open-xid-logd/open_xid_logd.c`](../open-xid-logd/open_xid_logd.
 
 ---
 
-## 5. End-to-End Live Verification on `192.168.1.24` (`2026-11-21`)
+## 5. `open-nvidia-vgpu-mgr` (C) — Clean-Room `vmiop-env` Runtime Daemon
 
-With `nvidia-vgpu-kvm/535.309.01` installed under DKMS (`updates/dkms/nvidia.ko.zst`, `updates/dkms/nvidia-vgpu-vfio.ko.zst`) and all three open host binaries active:
+Implemented in [`open-vgpu-mgr/`](../open-vgpu-mgr/) (`nv_vgpu_vfio_abi.h`, `rm_client.h`, `rm_client.c`, `vmiop_env.h`, `vmiop_env.c`, `open_vgpu_mgr.c`, `test_vgpu_mgr_unit.c`, `Makefile`) from **`rea@6.10.1`** static analysis (`159` functions analyzed, `115` decompiled under `evidence/vgpu-535-rea610/nvidia-vgpu-mgr.*.json`):
+
+1. **Master Control Loop (`0x103d70`, `0x111260..0x112b90`)**:
+   - Daemonizes, locks `/var/run/nvidia-vgpu-mgr/nvidia-vgpu-mgr.pid`, opens `/dev/nvidia-vgpuctl` + `/dev/nvidiactl`, verifies `NV_VFIO_VGPU_CTLDEV_VERSION_CHECK` (`0xc0107208`), allocates RM OS events `0xdae00401`/`0xdae00402` (GPU bind/unbind) and `vgpuctl` events `1..4` (`OPEN_DEVICE`, `CREATE_DEVICE`, `DELETE_DEVICE`, `GET_TYPES_INSTANCES`), and handles `NVA081` queries (`GET_PGPU_INFO` `0xa0810112`, `GET_CREATABLE_PLACEMENTS` `0xa081011c`, `UPDATE_PLACEMENT_INFO` `0xa081011e`, `GET_VGPU_TYPE_INFO` `0xa0810103`, `CREATE_LVGPU` `0xa081011f`, `DELETE_LVGPU` `0xa081011d`).
+   - On `NV_VFIO_VGPU_CTL_EVENT_OPEN_DEVICE`, forks a per-VM `vgpu` worker process (`prctl(PR_SET_NAME, "vgpu")`), resets parent RM state, parses `/proc/<qemu_pid>/cmdline` (`-uuid`, `-name`), and format-packs the physical GPU PCI BDF (`%02x:%02x:%02x.%01x`, `00:01:00.0`).
+2. **RM Escape Client (`0x104920..0x109c20`)**:
+   - Automatically wraps ioctl payloads `> 0x100` bytes (such as `4960`-byte `GET_VGPU_TYPE_INFO` and `1168`-byte `GET_BAR_INFO`) in `NV_ESC_IOCTL_XFER_CMD` (`0xc01046d3`).
+   - Maps pinned guest PFNs via `NV01_MEMORY_LIST_SYSTEM` (`0x81`, `0x80`-byte header + PFN array) and tracks both `mmap64` user VAs and kernel `mp.pLinearAddress` handles so `NV_ESC_RM_UNMAP_MEMORY` (`0x4f`) unmaps cleanly on `fdType == 1` (`/dev/nvidiactl`) and `fdType == 2` (`/dev/nvidiaN`).
+3. **Full `vmiop_*` Runtime ABI (`60` Original Exports Matched)**:
+   - Exports all `60` `vmiop_*` symbols (`diff -u` zero differences against NVIDIA's `nvidia-vgpu-mgr`), dynamically loads `libnvidia-vgpu.so` (`vmiop_display_vmiop_plugin@@VER_5_0` and `vmiop_display_vmiop_env@@VER_2_0`), and provides the built-in `vmiop_presentation` VNC/console plugin (`0x68` bytes, `version=0x20000`, `class=9`).
+   - Unprivileged unit test suite (`make -C open-vgpu-mgr clean all test`) validates all 5 test suites (`test_abi_and_error_table`, `test_memory_buffers_and_conversion`, `test_sync_and_threads`, `test_config_plugins_and_presentation`, `test_emul_regions_pin_map_and_rm`) with `-Wall -Wextra -Werror`.
+
+---
+
+## 6. End-to-End Live Verification on `192.168.1.24` (`2026-11-21`)
+
+With `nvidia-vgpu-kvm/535.309.01` installed under DKMS (`updates/dkms/nvidia.ko.zst`, `updates/dkms/nvidia-vgpu-vfio.ko.zst`) and all four open host binaries active (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`):
 1. **`nvidia-vgpud.service`**: Registered `12` Tesla P4 profiles (`RM mode 3`, driver `535.309.01`), creating all `12` sysfs types under `/sys/bus/pci/devices/0000:01:00.0/mdev_supported_types/` including `nvidia-65` (`GRID P4-4Q`, `available_instances = 2`).
 2. **`nvidia-xid-logd.service`**: Started cleanly (`Waiting for events...` on `00000000:01:00.0`), exited cleanly on `SIGTERM`, and unlinked its locked PID file.
 3. **`vm-alma` (`192.168.1.68`) + `vm-win11` (`192.168.1.65`) Concurrent 50/50 Boot**:

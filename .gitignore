@@ -35,6 +35,8 @@ open-vgxcfg/test_vgxcfg_unit
 open-vgxcfg/test_vgxcfg_diff
 open-xid-logd/open-nvidia-xid-logd
 open-xid-logd/mock_nvml.so
+open-vgpu-mgr/open-nvidia-vgpu-mgr
+open-vgpu-mgr/test_vgpu_mgr_unit
 
 # Rust / Python artifacts
 nova-vgpu/target/
