@@ -104,6 +104,8 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
 
     def test_repro_shell_scripts_syntax_and_dry_run_on_posix(self):
         scripts = [
+            ROOT / "scripts" / "install_open_vgpu.sh",
+            ROOT / "scripts" / "install_open_580.sh",
             ROOT / "scripts" / "install_vgpu_host_dkms.sh",
             ROOT / "scripts" / "install_fastapi_dls.sh",
             ROOT / "scripts" / "setup_proxmox_vgpu_vms.sh",
@@ -123,6 +125,11 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"bash -n failed for {s}: {r.stderr}")
 
         dry_cases = [
+            ["bash", str(ROOT / "scripts" / "install_open_vgpu.sh"), "--role", "host", "--dry-run"],
+            ["bash", str(ROOT / "scripts" / "install_open_vgpu.sh"), "--role", "guest-linux", "--dry-run"],
+            ["bash", str(ROOT / "scripts" / "install_open_vgpu.sh"), "--role", "guest-windows", "--dry-run"],
+            ["bash", str(ROOT / "scripts" / "install_open_580.sh"), "--role", "host", "--dry-run"],
+            ["bash", str(ROOT / "scripts" / "install_open_580.sh"), "--role", "guest-linux", "--dry-run"],
             ["bash", str(ROOT / "scripts" / "install_vgpu_host_dkms.sh"), "--dry-run"],
             ["bash", str(ROOT / "scripts" / "install_fastapi_dls.sh"), "--mode", "docker", "--dry-run"],
             ["bash", str(ROOT / "scripts" / "install_fastapi_dls.sh"), "--mode", "systemd", "--dry-run"],

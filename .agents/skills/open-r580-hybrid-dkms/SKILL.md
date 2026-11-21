@@ -25,7 +25,13 @@ bash dkms-compat/verify_r580_kbuild.sh
 ```
 
 ### 3. Full DKMS + Non-Clobbering Userspace Install (Including Wayland EGL/GBM & CDI)
+Use the unified host/guest installer (`scripts/install_open_580.sh`) or `open_r580_dkms_builder.sh` directly:
 ```bash
+# Unified installer (Bare-metal Host OR PCIe-passthrough Linux Guest):
+sudo bash scripts/install_open_580.sh --role host --run-file /path/to/NVIDIA-Linux-x86_64-580.178.04.run --with-selkies
+sudo bash scripts/install_open_580.sh --role guest-linux --run-file /path/to/NVIDIA-Linux-x86_64-580.178.04.run
+
+# Direct builder invocation:
 sudo bash open-r580-driver/open_r580_dkms_builder.sh \
   --driver-dir /tmp/r580_pkg \
   --install --with-userspace

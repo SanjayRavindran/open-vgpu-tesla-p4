@@ -103,15 +103,19 @@ cd .. && python3 -m unittest discover -s tests -v
 
 ## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host Daemons (`rea@6.10.1`)
 
-All self-contained `535.309.01-vgpu-kvm` host userspace configuration/monitoring daemons have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and replaced with open-source implementations, paired with reproducible **Ubuntu KVM** and **Proxmox VE 8/9** automation scripts:
-- **Open-Source Host Daemons**:
+All six `535.309.01-vgpu-kvm` host userspace configuration, runtime, and telemetry binaries have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and replaced with clean-room open-source implementations, paired with reproducible **Ubuntu KVM** and **Proxmox VE 8/9** host & guest installation scripts:
+- **Open-Source Host Daemons & Telemetry (`100%` of Host Userspace Executables)**:
   - `nova-vgpu` (`open-nvidia-vgpud`): pure-Rust `/dev/nvidiactl` RM ioctl registrar (`NVA081` `0xa0810101` + `0xa0810109`).
   - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all 9 `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
   - `open-xid-logd` (`open-nvidia-xid-logd`): clean-room C NVML XID daemon (`mock-NVML` + 76-char Base64 debugdump tested).
-  - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md).
-- **Reproducible Hypervisor & Guest Automation**:
-  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + open daemons installer for Ubuntu KVM & Proxmox VE 8/9.
+  - `open-vgpu-mgr` (`open-nvidia-vgpu-mgr`): clean-room C KVM/VFIO `vmiop-env` runtime daemon exporting all `60` `vmiop_*` symbols (`0` symbol diff against `nvidia-vgpu-mgr`).
+  - `open-nvml-smi` (`open-nvidia-smi` + `libopen-nvidia-ml.so`): clean-room C NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and active vGPU instances.
+  - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
+- **Unified Host & Guest Installation Scripts**:
+  - `scripts/install_open_vgpu.sh`: unified `--role host|guest-linux|guest-windows` installer for the 50/50 vGPU stack.
+  - `scripts/install_open_580.sh`: unified `--role host|guest-linux` installer for the bare-metal / PCIe-passthrough `open-580-driver` stack.
+  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + all 6 open host binaries installer for Ubuntu KVM & Proxmox VE 8/9.
   - `scripts/install_fastapi_dls.sh`: FastAPI-DLS v2 (`docker` or native `systemd`).
   - `scripts/setup_proxmox_vgpu_vms.sh`: Proxmox VE `fresh` & `import-qcow2` VM provisioning (`vm-alma` + `vm-win11`).
   - `scripts/provision_alma_guest.sh`, `scripts/provision_win11_guest.ps1`, and `scripts/templates/win11-autounattend.xml`.
-  - See [docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md](docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md).
+  - See [docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md](docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md) and [docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md](docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md).

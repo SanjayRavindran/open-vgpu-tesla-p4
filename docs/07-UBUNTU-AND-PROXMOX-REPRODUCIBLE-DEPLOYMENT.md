@@ -28,10 +28,12 @@ sudo bash scripts/install_vgpu_host_dkms.sh \
 
 What [`install_vgpu_host_dkms.sh`](../scripts/install_vgpu_host_dkms.sh) does automatically:
 1. Auto-detects **Proxmox VE** (`pveversion` -> `pve-headers-$(uname -r)`) vs **Ubuntu KVM** (`linux-headers-$(uname -r)`).
-2. Auto-builds our open-source host replacements if `--open-*` paths are omitted:
+2. Auto-builds our six open-source host replacements if `--open-*` paths are omitted:
    - `open-nvidia-vgpud` (`nova-vgpu` Rust release binary)
    - `libopen-vgxcfg.so` (`open-vgxcfg` C library)
    - `open-nvidia-xid-logd` (`open-xid-logd` C daemon)
+   - `open-nvidia-vgpu-mgr` (`open-vgpu-mgr` C runtime daemon exporting all 60 `vmiop_*` symbols)
+   - `open-nvidia-smi` + `libopen-nvidia-ml.so` (`open-nvml-smi` C telemetry CLI & NVML library)
 3. Removes any unmanaged `/lib/modules/$(uname -r)/extra/nvidia*.ko` duplicates and registers **`nvidia-vgpu-kvm/535.309.01`** cleanly under DKMS (`/usr/src/nvidia-vgpu-kvm-535.309.01/dkms.conf`), quoting `'make'` (`MAKE[0]="'make' -j$(nproc) KERNEL_UNAME=${kernelver} SYSSRC=${kernel_source_dir} modules"`) and running `dkms install --force` so DKMS installs signed `.ko.zst` modules into `/lib/modules/$(uname -r)/updates/dkms/` cleanly across kernel upgrades.
 4. Replaces legacy bare-metal R580 configs (`/etc/modules-load.d/nvidia-p4.conf` and `nvidia-drm` bare-metal options) with `/etc/modprobe.d/blacklist-nouveau.conf` and `/etc/modules-load.d/nvidia-vgpu.conf` (`nvidia`, `nvidia-vgpu-vfio`, `vfio-pci`, `mdev`).
 5. Installs clean systemd units:
