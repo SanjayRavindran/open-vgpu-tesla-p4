@@ -37,6 +37,10 @@ open-xid-logd/open-nvidia-xid-logd
 open-xid-logd/mock_nvml.so
 open-vgpu-mgr/open-nvidia-vgpu-mgr
 open-vgpu-mgr/test_vgpu_mgr_unit
+open-nvml-smi/libopen-nvidia-ml.so
+open-nvml-smi/libnvidia-ml.so.1
+open-nvml-smi/open-nvidia-smi
+open-nvml-smi/test_nvml_smi_unit
 
 # Rust / Python artifacts
 nova-vgpu/target/

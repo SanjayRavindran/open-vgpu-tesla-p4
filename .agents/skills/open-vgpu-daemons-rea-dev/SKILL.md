@@ -17,8 +17,9 @@ description: >-
   2. `libopen-vgxcfg.so` (`open-vgxcfg/open_vgxcfg.c`) -> zero-dependency XML DOM + all 9 ABI-exact `vgxConfig*` exports (`0xe4` USM struct, `0x210` global settings, `0x18` physGPU/supportedUsm, `0x10` display).
   3. `open-nvidia-xid-logd` (`open-xid-logd/open_xid_logd.c`) -> daemonize/foreground + PID locking + `dlopen("libnvidia-ml.so.1")`, clean non-GSP Pascal exit `0`, Base64 76-char XID debugdump syslog reporter on GSP GPUs.
   4. `open-nvidia-vgpu-mgr` (`open-vgpu-mgr/open_vgpu_mgr.c`, `vmiop_env.c`, `rm_client.c`) -> KVM/VFIO `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d` master/worker runtime daemon, `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), and all `60` dynamic `vmiop*` exports + `vmiop_presentation` for `libnvidia-vgpu.so`.
-  5. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
-- **Retained Stable Components**: `nvidia.ko` (`nv-kernel.o_binary`), `libnvidia-vgpu.so.535.309.01`, `nvidia-smi` / `libnvidia-ml.so.535.309.01` for live VM vGPU data-plane reliability.
+  5. `open-nvidia-smi` & `libopen-nvidia-ml.so` (`open-nvml-smi/open_nvml.c`, `open_nvidia_smi.c`) -> clean-room NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and vGPU instances.
+  6. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
+- **Retained Stable Components**: `nvidia.ko` (`nv-kernel.o_binary`) and `libnvidia-vgpu.so.535.309.01` for live VM vGPU data-plane reliability.
 
 ## 1. Running `rea@6.10.1` Static Analysis & Decompilation (`192.168.1.15`)
 Always export `GHIDRA_INSTALL_DIR` and pass a fresh absent `--output` dir for `decompile-all`:
@@ -48,6 +49,9 @@ make -C open-xid-logd clean all test
 # C open-nvidia-vgpu-mgr vmiop-env ABI + mock-RM/VFIO unit tests
 make -C open-vgpu-mgr clean all test
 
+# C open-nvidia-smi + libopen-nvidia-ml.so mock-RM unit tests
+make -C open-nvml-smi clean all test
+
 # Clean build binaries before git commit (CI rejects tracked .so/ELF files)
-make -C open-vgxcfg clean && make -C open-xid-logd clean && make -C open-vgpu-mgr clean
+make -C open-vgxcfg clean && make -C open-xid-logd clean && make -C open-vgpu-mgr clean && make -C open-nvml-smi clean
 ```

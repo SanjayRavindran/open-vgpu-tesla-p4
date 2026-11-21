@@ -115,8 +115,11 @@ if [ "$SKIP_BUILD_OPEN" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     make -C "$REPO_ROOT/open-vgpu-mgr" all
     OPEN_VGPU_MGR="$REPO_ROOT/open-vgpu-mgr/open-nvidia-vgpu-mgr"
   fi
+  if [ -f "$REPO_ROOT/open-nvml-smi/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+    make -C "$REPO_ROOT/open-nvml-smi" all
+  fi
 else
-  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd, open-nvidia-vgpu-mgr"
+  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd, open-nvidia-vgpu-mgr, open-nvml-smi"
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -181,6 +184,10 @@ install -m 0755 "$OPEN_VGPU_MGR" "${OPT_DIR}/nvidia-vgpu-mgr"
 install -m 0755 "$OPEN_VGXCFG" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.${PKG_VER}"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.1"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so"
+if [ -f "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" ] && [ -f "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" ]; then
+  install -m 0755 "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" "${OPT_DIR}/open-nvidia-smi"
+  install -m 0755 "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" "${OPT_DIR}/libopen-nvidia-ml.so"
+fi
 
 # Retain stable vmiop plugin, nvidia-smi, and NVML from .run
 install -m 0755 "$TMP_EXTRACT/pkg/nvidia-smi" "${OPT_DIR}/nvidia-smi"

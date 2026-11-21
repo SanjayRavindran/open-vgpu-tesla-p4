@@ -16,10 +16,10 @@ To maximize open-source transparency without destabilizing live VM GPU virtualiz
 | **`libopen-vgxcfg.so`** | **Replaced (Open)** | C (`open-vgxcfg`) | Self-contained XML DOM parser exporting all 9 ABI-exact `vgxConfig*` functions (`soname libnvidia-vgxcfg.so.1`) |
 | **`open-nvidia-xid-logd`** | **Replaced (Open)** | C (`open-xid-logd`) | Daemonizes, locks `$RUNTIME_DIRECTORY/nvidia-xid-logd.pid`, dynamically loads `libnvidia-ml.so.1`, exits cleanly (`0`) on non-GSP GPUs (`NVML_ERROR_NOT_SUPPORTED`), or logs 76-char Base64 `nvidia-debugdump` XID reports on GSP GPUs |
 | **`open-nvidia-vgpu-mgr`** | **Replaced (Open)** | C (`open-vgpu-mgr`) | Full KVM/VFIO `vmiop-env` runtime daemon: binds `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d`, forks per-VM `vgpu` worker processes, manages `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), and exports all `60` dynamic `vmiop_*` symbols + `vmiop_presentation` to `libnvidia-vgpu.so` |
+| **`open-nvidia-smi`** & **`libopen-nvidia-ml.so`** | **Replaced (Open)** | C (`open-nvml-smi`) | Clean-room NVML (`libnvidia-ml.so.1` SONAME) & `nvidia-smi` CLI: queries `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*` + `0xa081*`) for GP104 temperature, power, clocks, FB/BAR1 memory, active `vgpu` processes, and supported/creatable/active vGPU instances |
 | **`nvidia-vgpu-vfio.ko`** | **Open (DKMS)** | C / MIT (`535.309.01`) | Packaged alongside `nvidia.ko` in `/usr/src/nvidia-vgpu-kvm-535.309.01` for automatic rebuilds across Ubuntu & Proxmox kernels |
 | **`nvidia.ko`** (`nv-kernel.o_binary`) | Retained (Stable) | Proprietary kernel core | Handles Pascal Falcon signed blobs (`ACR`, `PMU`, `SEC2`, `FECS`) and RM IOCTL dispatch |
 | **`libnvidia-vgpu.so.535.309.01`** | Retained (Stable) | Proprietary `vmiop` plugin | Loaded dynamically by `open-nvidia-vgpu-mgr` (`vmiop_display_vmiop_plugin@@VER_5_0`) for 50/50 multi-VM BAR0/VRPC mediation |
-| **`nvidia-smi`** & **`libnvidia-ml.so.535.309.01`** | Retained (Stable) | Proprietary management | Version-locked `535.309.01` telemetry (`API mismatch` prevention) |
 
 ---
 

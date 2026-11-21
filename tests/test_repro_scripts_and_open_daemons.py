@@ -35,6 +35,12 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             "nvidia-vgpu-mgr.exports.json",
             "nvidia-vgpu-mgr.exposure.json",
             "nvidia-vgpu-mgr.layout.json",
+            "nvidia-smi.exports.json",
+            "nvidia-smi.exposure.json",
+            "nvidia-smi.layout.json",
+            "libnvidia-ml.so.535.309.01.exports.json",
+            "libnvidia-ml.so.535.309.01.exposure.json",
+            "libnvidia-ml.so.535.309.01.layout.json",
         ]
         for fn in expected:
             p = ev_dir / fn
@@ -61,6 +67,11 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-vgpu-mgr" / "open_vgpu_mgr.c",
             ROOT / "open-vgpu-mgr" / "test_vgpu_mgr_unit.c",
             ROOT / "open-vgpu-mgr" / "Makefile",
+            ROOT / "open-nvml-smi" / "open_nvml.h",
+            ROOT / "open-nvml-smi" / "open_nvml.c",
+            ROOT / "open-nvml-smi" / "open_nvidia_smi.c",
+            ROOT / "open-nvml-smi" / "test_nvml_smi_unit.c",
+            ROOT / "open-nvml-smi" / "Makefile",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
             ROOT / "nova-vgpu" / "src" / "bin" / "open_nvidia_vgpud.rs",
         ]
