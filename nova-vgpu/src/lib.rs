@@ -13,6 +13,7 @@ pub mod config;
 pub mod falcon_blobs;
 pub mod guest;
 pub mod pci_cfg;
+pub mod rm_ioctl;
 pub mod rm_vgpu;
 pub mod vfio_ioctl;
 pub mod vmiop;
@@ -87,6 +88,11 @@ mod tests {
     <encoderCapacity>0x64</encoderCapacity>
     <bar1Length>0x100</bar1Length>
     <frame_rate_limiter>1</frame_rate_limiter>
+    <gpuInstanceSize>0</gpuInstanceSize>
+    <gpuDirectSupported>1</gpuDirectSupported>
+    <nvlinkP2PSupported>0</nvlinkP2PSupported>
+    <multiVgpuExclusive>1</multiVgpuExclusive>
+    <extraParameters>vgpu_extra=1</extraParameters>
     <license>QVDWS;VWS;VWSExt</license>
   </vgpuType>
   <vgpuType id="64" name="GRID P4-2Q" class="Quadro">
@@ -105,6 +111,11 @@ mod tests {
     <encoderCapacity>0x64</encoderCapacity>
     <bar1Length>0x100</bar1Length>
     <frame_rate_limiter>1</frame_rate_limiter>
+    <gpuInstanceSize>0</gpuInstanceSize>
+    <gpuDirectSupported>1</gpuDirectSupported>
+    <nvlinkP2PSupported>0</nvlinkP2PSupported>
+    <multiVgpuExclusive>1</multiVgpuExclusive>
+    <extraParameters>vgpu_extra=1</extraParameters>
     <license>QVDWS;VWS;VWSExt</license>
   </vgpuType>
 </vgpuconfig>"#
@@ -134,15 +145,36 @@ mod tests {
         assert!(!store.global.heterogeneous_multi_vgpu);
         assert_eq!(store.global.plugin_so_name, "libnvidia-vgpu");
 
+        assert!(store.find_pgpu_exact(0x10de, 0x1bb3, 0x10de, 0x11d8).is_some());
+
         let pairs = store.supported_profiles_for_gpu(0x10de, 0x1bb3).unwrap();
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0].1.name, "GRID P4-1Q");
         assert_eq!(pairs[0].1.dev_id.subsystem_id, 0x1204);
 
-        let packed = Nva081SetInfoParams::from_profile(pairs[0].1, pairs[0].0, false, true);
+        let packed = Nva081SetInfoParams::from_profile_for_pgpu(
+            pairs[0].1,
+            pairs[0].0,
+            0x1bb3,
+            false,
+            true,
+        );
         assert_eq!(packed.raw[0], 1);
         assert_eq!(u32::from_le_bytes(packed.raw[0x008..0x00c].try_into().unwrap()), 63);
         assert_eq!(packed.raw[0x04c], 0x2f);
+        let lic_end = packed.raw[0x0cc..0x14c].iter().position(|&b| b == 0).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&packed.raw[0x0cc..0x0cc + lic_end]).unwrap(),
+            "Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0"
+        );
+        assert_eq!(u64::from_le_bytes(packed.raw[0x180..0x188].try_into().unwrap()), 0x1bb3);
+        let extra_end = packed.raw[0x344..0x1344].iter().position(|&b| b == 0).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&packed.raw[0x344..0x344 + extra_end]).unwrap(),
+            "vgpu_extra=1"
+        );
+        assert_eq!(u32::from_le_bytes(packed.raw[0x1348..0x134c].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packed.raw[0x1350..0x1354].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(packed.raw[0x1360..0x1364].try_into().unwrap()), 1);
     }
 

@@ -31,6 +31,10 @@ firmware-blobs/gp104-vgpu-535/sec2/
 Module.symvers
 .tmp_versions/
 test_guest_ioctl
+open-vgxcfg/test_vgxcfg_unit
+open-vgxcfg/test_vgxcfg_diff
+open-xid-logd/open-nvidia-xid-logd
+open-xid-logd/mock_nvml.so
 
 # Rust / Python artifacts
 nova-vgpu/target/

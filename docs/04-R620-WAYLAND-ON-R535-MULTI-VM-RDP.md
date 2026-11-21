@@ -40,3 +40,13 @@ Following the BIOS upgrade to **UEFI Coreboot (`df45ea2c49b4-dirty` on Gigabyte 
    - When a Retina macOS RDP client requests dynamic resolution `3600 × 2262` (`RdpCoreTS` Event `168`) while `AVCHardwareEncodePreferred=1` forces the `NVIDIA H.264 Encoder MFT` on the RDP transport stream, `RDP_GFX` fails with `0x8007007A` (`ERROR_INSUFFICIENT_BUFFER`), dropping the session with `Error code: 0x200d`.
    - Additionally, force-restarting `TermService` live on Windows (`Restart-Service TermService -Force`) invalidates `LocalSessionManager`'s service handle (`reason code 12`), and setting `UserAuthentication=0` spawns a pre-logon session that sits on `"Other user — Welcome"` for ~12 seconds during session arbitration.
    - **Fix:** Removed the `AVCHardwareEncodePreferred` policy override (keeping `NVIDIA GRID P4-4Q` active for all DWM, DirectX 12, Vulkan, OpenGL 4.6, CUDA, NVENC/NVDEC, GPU-Z, and NVIDIA Control Panel workloads), configured `.rdp` profiles for `1920 × 1080` (`dynamic resolution:i:0`, `smart sizing:i:1`), and enabled NLA (`UserAuthentication=1`) for instant session attachment.
+
+
+---
+
+## Reproducible Automation & Open-Source Host Stack (`2026-11-21`)
+
+All host and guest configuration fixes above are now automated and reproducible on both **Ubuntu KVM** and **Proxmox VE 8/9**:
+- **Host DKMS & Open Daemons**: [`scripts/install_vgpu_host_dkms.sh`](../scripts/install_vgpu_host_dkms.sh) packages `nvidia-vgpu-kvm/535.309.01` (`nvidia.ko` + `nvidia-vgpu-vfio.ko`) under DKMS and deploys our open-source `open-nvidia-vgpud`, `libopen-vgxcfg.so`, and `open-nvidia-xid-logd` ([docs/08](08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md)).
+- **License Server & Proxmox Migration**: [`scripts/install_fastapi_dls.sh`](../scripts/install_fastapi_dls.sh) (`--mode docker|systemd`) and [`scripts/setup_proxmox_vgpu_vms.sh`](../scripts/setup_proxmox_vgpu_vms.sh) (`--mode fresh|import-qcow2`).
+- **Guest Provisioning**: [`scripts/provision_alma_guest.sh`](../scripts/provision_alma_guest.sh) (R535 kernel + R620 Wayland/GBM + `GSK_RENDERER=ngl` + headless `:3389` RDP + Selkies) and [`scripts/provision_win11_guest.ps1`](../scripts/provision_win11_guest.ps1) (WDDM `539.72`, FastAPI-DLS token, `0x200d` fix) — see [docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md](07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md).

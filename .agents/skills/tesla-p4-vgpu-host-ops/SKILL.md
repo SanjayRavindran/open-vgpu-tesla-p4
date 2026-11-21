@@ -13,12 +13,20 @@ description: >-
 ## Host Overview
 - **Host IP & Bridge**: `192.168.1.24/24` on `br0` (`MAC d0:50:99:7c:84:dd`, gateway `192.168.1.1` in `/etc/netplan/00-installer-config.yaml`)
 - **Firmware & Silicon**: UEFI Coreboot `df45ea2c49b4-dirty` on Gigabyte `H61M-S1 PLUS`, Intel Xeon E3-1275 V2 (`4C/8T`, `x86-64-v2`), Intel VT-d (`DMAR`) active, Above-4G 64-bit BAR1 (`0xfe0000000`)
-- **Host Driver**: `535.309.01-vgpu-kvm` on Ubuntu 26.04 LTS (`7.0.0-43-generic`), userspace binaries in `/opt/nvidia-vgpu-535/`
+- **Host Driver & Open Daemons**: DKMS `nvidia-vgpu-kvm/535.309.01` on Ubuntu 26.04 LTS (`7.0.0-43-generic`, `/updates/dkms/{nvidia,nvidia-vgpu-vfio}.ko.zst`), module autoload `/etc/modules-load.d/nvidia-vgpu.conf`, userspace runtime in `/opt/nvidia-vgpu-535/` combining open-source host daemons (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`) with stable `nvidia-vgpu-mgr` + `libnvidia-vgpu.so.535.309.01` + `nvidia-smi`
 - **Active 50/50 VMs (`vgpu-vms.service` -> `/home/zero/vms/start_all_vms.sh`)**:
   - `vm-alma` (`192.168.1.68`): `4 vCPU`, `5120M` RAM, mdev `11111111-0000-0000-0000-000000000003` (`nvidia-65` / `GRID P4-4Q`, `4096M` VRAM)
   - `vm-win11` (`192.168.1.65`): `4 vCPU`, `6144M` RAM, mdev `11111111-0000-0000-0000-000000000005` (`nvidia-65` / `GRID P4-4Q`, `4096M` VRAM)
 
 ## Procedures
+
+### 0. DKMS & Clean Host Reproduction
+- Check DKMS status and module paths:
+  ```bash
+  dkms status
+  modinfo -n nvidia nvidia_vgpu_vfio
+  ```
+- Note: Do **not** restore removed bare-metal R580 configs (`/etc/modules-load.d/nvidia-p4.conf` or unmanaged `extra/nvidia*.ko`); recreate the full host stack cleanly via `scripts/install_vgpu_host_dkms.sh`.
 
 ### 1. Verify Host vGPU Kernel Modules & Avoid R580 vs. R535 API Mismatch
 If `nvidia-smi` fails or `dmesg` reports `NVRM: API mismatch: the client has the version 580.178.04, but this kernel module has the version 535.309.01`:

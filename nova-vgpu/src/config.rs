@@ -48,6 +48,11 @@ pub struct VgpuProfile {
     pub encoder_capacity: u32,
     pub bar1_length_mb: u64,
     pub license: String,
+    pub gpu_instance_size: u32,
+    pub gpu_direct_supported: u32,
+    pub nvlink_p2p_supported: u32,
+    pub multi_vgpu_exclusive: u32,
+    pub extra_parameters: String,
 }
 
 /// Per-physical-GPU supported vGPU entry from `<pgpu>/<supportedVgpu>`.
@@ -122,6 +127,23 @@ impl VgpuConfigStore {
             .find(|p| p.dev_id.vendor_id == vendor_id && p.dev_id.device_id == device_id)
     }
 
+    /// Find a physical GPU matching full 4-tuple PCI ID, supporting `subsystemId == 0` wildcard
+    /// matching as observed in `nvidia-vgpud` (`0x404440.c`).
+    pub fn find_pgpu_exact(
+        &self,
+        vendor_id: u16,
+        device_id: u16,
+        subsystem_vendor_id: u16,
+        subsystem_id: u16,
+    ) -> Option<&PhysicalGpuConfig> {
+        self.pgpus.iter().find(|p| {
+            p.dev_id.vendor_id == vendor_id
+                && p.dev_id.device_id == device_id
+                && p.dev_id.subsystem_vendor_id == subsystem_vendor_id
+                && (p.dev_id.subsystem_id == 0 || p.dev_id.subsystem_id == subsystem_id)
+        })
+    }
+
     /// Look up a `VgpuProfile` by numeric `vgpu_id`.
     pub fn profile_by_id(&self, id: u32) -> Option<&VgpuProfile> {
         self.profiles.iter().find(|p| p.id == id)
@@ -147,6 +169,30 @@ impl VgpuConfigStore {
     }
 }
 
+/// Expand semicolon-separated short GRID license tokens into the full feature strings
+/// expected by `nvidia.ko` / `nvidia-vgpu-mgr` (exact logic from `nvidia-vgpud` `0x4039f0.c`).
+pub fn expand_license_string(raw: &str) -> VgpuResult<String> {
+    let mut parts = Vec::new();
+    for tok in raw.split(';').map(str::trim).filter(|t| !t.is_empty()) {
+        let mapped = match tok {
+            "VPC" => "GRID-Virtual-PC,2.0",
+            "VWS" => "GRID-Virtual-WS,2.0",
+            "VWSExt" => "GRID-Virtual-WS-Ext,2.0",
+            "VApps" => "GRID-Virtual-Apps,3.0",
+            "QVDWS" => "Quadro-Virtual-DWS,5.0",
+            "VGaming" => "GRID-vGaming,8.0",
+            "VCS" => "NVIDIA-vComputeServer,9.0",
+            other if other.contains(',') => other,
+            _ => return Err(VgpuError::MalformedXml("unknown GRID license token")),
+        };
+        parts.push(mapped);
+    }
+    if parts.is_empty() {
+        return Err(VgpuError::MalformedXml("empty GRID license string"));
+    }
+    Ok(parts.join(";"))
+}
+
 /// Wire-accurate layout of `NVA081_CTRL_VGPU_CONFIG_SET_INFO_PARAMS` (`0x1368` = `4968` bytes)
 /// observed in `nvidia-vgpud` (`0x402ca0.c`) for RM control `0xa0810101`.
 #[repr(C)]
@@ -163,6 +209,23 @@ impl Nva081SetInfoParams {
         is_last: bool,
         first_flag: bool,
     ) -> Self {
+        Self::from_profile_for_pgpu(
+            profile,
+            supported,
+            profile.dev_id.device_id,
+            is_last,
+            first_flag,
+        )
+    }
+
+    /// Pack a `VgpuProfile` and `SupportedVgpuEntry` for a specific physical GPU device ID.
+    pub fn from_profile_for_pgpu(
+        profile: &VgpuProfile,
+        supported: &SupportedVgpuEntry,
+        pgpu_device_id: u16,
+        is_last: bool,
+        first_flag: bool,
+    ) -> Self {
         let mut raw = [0u8; 0x1368];
         // Offsets relative to local_13a8 in nvidia-vgpud (0x402ca0.c):
         // +0x000: u8 first_flag (local_1a5a)
@@ -170,7 +233,7 @@ impl Nva081SetInfoParams {
         // +0x00c: char[32] name (local_139c)
         // +0x02c: char[32] class (local_137c)
         // +0x04c: [u8; 128] digest (local_135c)
-        // +0x0cc: char[128] license (local_12dc)
+        // +0x0cc: char[128] expanded license (local_12dc)
         // +0x14c: u32 max_instance (local_125c)
         // +0x150: u32 num_heads (local_1258)
         // +0x154: u32 display_width (local_1254)
@@ -179,8 +242,10 @@ impl Nva081SetInfoParams {
         // +0x160: u32 frl_config (local_1248)
         // +0x164: u32 cuda_enabled (local_1244)
         // +0x168: u32 ecc_supported (local_1240)
+        // +0x16c: u32 gpu_instance_size (local_123c)
         // +0x170: u32 multi_vgpu_supported (local_1238)
         // +0x178: u64 ((device_id << 16) | subsystem_id) (local_1230)
+        // +0x180: u64 pgpu_device_id (local_1228)
         // +0x188: u64 profile_size (local_1220)
         // +0x190: u64 framebuffer (local_1218)
         // +0x198: u64 gsp_heap_size (local_1210)
@@ -189,13 +254,19 @@ impl Nva081SetInfoParams {
         // +0x1b0: u32 encoder_capacity (local_11f8)
         // +0x1b8: u64 bar1_length_mb (local_11f0)
         // +0x1c0: u32 frame_rate_limiter (local_11e8)
+        // +0x344: char[4096] extra_parameters (local_1064)
+        // +0x1348: u32 gpu_direct_supported (local_60)
+        // +0x134c: u32 nvlink_p2p_supported (local_5c)
+        // +0x1350: u32 multi_vgpu_exclusive (local_58)
         // +0x1360: u32 end_state (1 = normal, 2 = last) (local_48)
+        let expanded_license =
+            expand_license_string(&profile.license).unwrap_or_else(|_| profile.license.clone());
         raw[0] = u8::from(first_flag);
         put_u32(&mut raw, 0x008, profile.id);
         put_cstr(&mut raw, 0x00c, 32, &profile.name);
         put_cstr(&mut raw, 0x02c, 32, &profile.class_name);
         raw[0x04c..0x04c + VGPU_DIGEST_BYTES].copy_from_slice(&supported.digest);
-        put_cstr(&mut raw, 0x0cc, 128, &profile.license);
+        put_cstr(&mut raw, 0x0cc, 128, &expanded_license);
         put_u32(&mut raw, 0x14c, supported.max_vgpus);
         put_u32(&mut raw, 0x150, profile.num_heads);
         put_u32(&mut raw, 0x154, profile.display_width);
@@ -204,10 +275,12 @@ impl Nva081SetInfoParams {
         put_u32(&mut raw, 0x160, profile.frl_config);
         put_u32(&mut raw, 0x164, u32::from(profile.cuda_enabled));
         put_u32(&mut raw, 0x168, u32::from(profile.ecc_supported));
+        put_u32(&mut raw, 0x16c, profile.gpu_instance_size);
         put_u32(&mut raw, 0x170, u32::from(profile.multi_vgpu_supported));
         let packed_dev =
             ((profile.dev_id.device_id as u64) << 16) | (profile.dev_id.subsystem_id as u64);
         put_u64(&mut raw, 0x178, packed_dev);
+        put_u64(&mut raw, 0x180, pgpu_device_id as u64);
         put_u64(&mut raw, 0x188, profile.profile_size);
         put_u64(&mut raw, 0x190, profile.framebuffer);
         put_u64(&mut raw, 0x198, profile.gsp_heap_size);
@@ -216,6 +289,12 @@ impl Nva081SetInfoParams {
         put_u32(&mut raw, 0x1b0, profile.encoder_capacity);
         put_u64(&mut raw, 0x1b8, profile.bar1_length_mb);
         put_u32(&mut raw, 0x1c0, u32::from(profile.frame_rate_limiter));
+        if !profile.extra_parameters.is_empty() {
+            put_cstr(&mut raw, 0x344, 4096, &profile.extra_parameters);
+        }
+        put_u32(&mut raw, 0x1348, profile.gpu_direct_supported);
+        put_u32(&mut raw, 0x134c, profile.nvlink_p2p_supported);
+        put_u32(&mut raw, 0x1350, profile.multi_vgpu_exclusive);
         put_u32(&mut raw, 0x1360, if is_last { 2 } else { 1 });
         Self { raw }
     }
@@ -327,6 +406,13 @@ fn parse_vgpu_type_block(block: &str) -> VgpuResult<VgpuProfile> {
         encoder_capacity: tag_u32(block, "encoderCapacity").unwrap_or(0x64),
         bar1_length_mb: tag_u64(block, "bar1Length").unwrap_or(0x100),
         license: extract_tag_text(block, "license").unwrap_or("").to_string(),
+        gpu_instance_size: tag_u32(block, "gpuInstanceSize").unwrap_or(0),
+        gpu_direct_supported: tag_u32(block, "gpuDirectSupported").unwrap_or(0),
+        nvlink_p2p_supported: tag_u32(block, "nvlinkP2PSupported").unwrap_or(0),
+        multi_vgpu_exclusive: tag_u32(block, "multiVgpuExclusive").unwrap_or(0),
+        extra_parameters: extract_tag_text(block, "extraParameters")
+            .unwrap_or("")
+            .to_string(),
     })
 }
 

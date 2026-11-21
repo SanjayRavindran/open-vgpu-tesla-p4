@@ -97,3 +97,21 @@ cd .. && python3 -m unittest discover -s tests -v
 - [05 — Complete Project Retrospective & Open vGPU Pros/Cons](./docs/05-PROJECT-RETROSPECTIVE-AND-PROS-CONS.md)
 - [06 — Limitations, R620 vs. R535 Hybrid Comparison, RDP Feature Matrix & Live Verification Report](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md)
 - [Disclaimer, Risk Notice & AI/LLM Usage Disclosure](./DISCLAIMER.md)
+
+
+---
+
+## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host Daemons (`rea@6.10.1`)
+
+All self-contained `535.309.01-vgpu-kvm` host userspace configuration/monitoring daemons have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and replaced with open-source implementations, paired with reproducible **Ubuntu KVM** and **Proxmox VE 8/9** automation scripts:
+- **Open-Source Host Daemons**:
+  - `nova-vgpu` (`open-nvidia-vgpud`): pure-Rust `/dev/nvidiactl` RM ioctl registrar (`NVA081` `0xa0810101` + `0xa0810109`).
+  - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all 9 `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
+  - `open-xid-logd` (`open-nvidia-xid-logd`): clean-room C NVML XID daemon (`mock-NVML` + 76-char Base64 debugdump tested).
+  - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md).
+- **Reproducible Hypervisor & Guest Automation**:
+  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + open daemons installer for Ubuntu KVM & Proxmox VE 8/9.
+  - `scripts/install_fastapi_dls.sh`: FastAPI-DLS v2 (`docker` or native `systemd`).
+  - `scripts/setup_proxmox_vgpu_vms.sh`: Proxmox VE `fresh` & `import-qcow2` VM provisioning (`vm-alma` + `vm-win11`).
+  - `scripts/provision_alma_guest.sh`, `scripts/provision_win11_guest.ps1`, and `scripts/templates/win11-autounattend.xml`.
+  - See [docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md](docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md).

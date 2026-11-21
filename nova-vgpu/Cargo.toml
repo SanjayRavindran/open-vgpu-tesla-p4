@@ -17,3 +17,7 @@ path = "src/bin/nova_vgpu_tool.rs"
 [[bin]]
 name = "nova_vgpu_guest_tool"
 path = "src/bin/nova_vgpu_guest_tool.rs"
+
+[[bin]]
+name = "open-nvidia-vgpud"
+path = "src/bin/open_nvidia_vgpud.rs"
