@@ -219,17 +219,18 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                 u32[1] = 2U;
                 for (uint32_t i = 0; i < 2; i++) {
                     uint8_t *e = &p[8 + i * 0x150];
-                    *(uint32_t *)&e[0x00] = i + 1U;
-                    *(uint32_t *)&e[0x04] = 1U;
-                    *(uint32_t *)&e[0x08] = 0x41U;
+                    *(uint32_t *)&e[0x00] = (i == 0) ? 88904U : 88970U;
+                    *(uint32_t *)&e[0x04] = (i == 0) ? 88890U : 88950U;
+                    *(uint32_t *)&e[0x08] = 1U;
                     *(uint32_t *)&e[0x0c] = 60U;
                     *(uint32_t *)&e[0x10] = 0U;
                     *(uint32_t *)&e[0x14] = 100U;
                     e[0x18] = 1U;
-                    snprintf((char *)&e[0x28], 16, (i == 0) ? "vm-alma" : "vm-win11");
-                    snprintf((char *)&e[0x78], 128, (i == 0) ? "535.309.01" : "539.72");
-                    *(uint32_t *)&e[0x100] = (i == 0) ? 88904U : 88970U;
-                    snprintf((char *)&e[0x110], 16, (i == 0) ? "vgpu-uuid-1" : "vgpu-uuid-2");
+                    snprintf((char *)&e[0x38], 16, (i == 0) ? "vgpu-uuid-1" : "vgpu-uuid-2");
+                    *(uint32_t *)&e[0x48] = 1U;
+                    snprintf((char *)&e[0x78], 128, (i == 0) ? "vm-alma" : "vm-win11");
+                    *(uint32_t *)&e[0x100] = 0x41U;
+                    snprintf((char *)&e[0x110], 16, (i == 0) ? "535.309.01" : "539.72");
                     snprintf((char *)&e[0x120], 16, (i == 0) ? "mdev-uuid-1" : "mdev-uuid-2");
                     *(uint64_t *)&e[0x138] = 4000ULL * 1024ULL * 1024ULL;
                 }
@@ -338,17 +339,19 @@ static void test_nvml_vgpu_and_processes(void) {
     nvmlVgpuInstance_t insts[16];
     unsigned int icnt = 16;
     assert(nvmlDeviceGetActiveVgpus(dev, &icnt, insts) == NVML_SUCCESS && icnt == 2U);
-    assert(insts[0] == 1U && insts[1] == 2U);
+    assert(insts[0] == 88904U && insts[1] == 88970U);
 
     char vmid[64] = {0}, gdrv[64] = {0};
     nvmlVgpuVmIdType_t idt = NVML_VGPU_VM_ID_DOMAIN_ID;
     unsigned int lic = 0;
     unsigned long long fbu = 0;
-    assert(nvmlVgpuInstanceGetVmID(1U, vmid, sizeof(vmid), &idt) == NVML_SUCCESS && strcmp(vmid, "vm-alma") == 0);
-    assert(nvmlVgpuInstanceGetVmDriverVersion(1U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "535.309.01") == 0);
-    assert(nvmlVgpuInstanceGetVmDriverVersion(2U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "539.72") == 0);
-    assert(nvmlVgpuInstanceGetLicenseStatus(1U, &lic) == NVML_SUCCESS && lic == 1U);
-    assert(nvmlVgpuInstanceGetFbUsage(1U, &fbu) == NVML_SUCCESS && fbu == 4000ULL * 1024ULL * 1024ULL);
+    nvmlVgpuTypeId_t vtid = 0;
+    assert(nvmlVgpuInstanceGetType(88904U, &vtid) == NVML_SUCCESS && vtid == 0x41U);
+    assert(nvmlVgpuInstanceGetVmID(88904U, vmid, sizeof(vmid), &idt) == NVML_SUCCESS && strcmp(vmid, "vm-alma") == 0);
+    assert(nvmlVgpuInstanceGetVmDriverVersion(88904U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "535.309.01") == 0);
+    assert(nvmlVgpuInstanceGetVmDriverVersion(88970U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "539.72") == 0);
+    assert(nvmlVgpuInstanceGetLicenseStatus(88904U, &lic) == NVML_SUCCESS && lic == 1U);
+    assert(nvmlVgpuInstanceGetFbUsage(88904U, &fbu) == NVML_SUCCESS && fbu == 4000ULL * 1024ULL * 1024ULL);
 
     nvmlProcessInfo_v3_t procs[16];
     unsigned int pcnt = 16;

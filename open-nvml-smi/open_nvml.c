@@ -1106,8 +1106,8 @@ static nvmlReturn_t query_running_processes(nvmlDevice_t device, unsigned int *i
             if (nv > 32U) nv = 32U;
             for (uint32_t i = 0; i < nv; i++) {
                 uint8_t *e = &vbuf[8 + i * 0x150];
-                uint32_t pid = *(uint32_t *)&e[0x100];
-                uint32_t vtype = *(uint32_t *)&e[0x08];
+                uint32_t pid = *(uint32_t *)&e[0x00];
+                uint32_t vtype = *(uint32_t *)&e[0x100];
                 uint64_t fb = *(uint64_t *)&e[0x138];
                 if (fb == 0 && vtype != 0) {
                     unsigned long long type_fb = 0;
@@ -1481,10 +1481,10 @@ nvmlReturn_t nvmlVgpuInstanceGetVmID(nvmlVgpuInstance_t vgpuInstance, char *vmId
     if (!vmId || !vmIdType || size == 0) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    uint32_t t = *(uint32_t *)&e[0x04];
+    uint32_t t = *(uint32_t *)&e[0x48];
     *vmIdType = (t == 0) ? NVML_VGPU_VM_ID_DOMAIN_ID : NVML_VGPU_VM_ID_UUID;
-    if (t == 0 && !is_printable_ascii_str(&e[0x28], 16)) {
-        snprintf(vmId, size, "%llu", (unsigned long long)(*(uint64_t *)&e[0x28]));
+    if (is_printable_ascii_str(&e[0x78], 63)) {
+        snprintf(vmId, size, "%.63s", (const char *)&e[0x78]);
     } else {
         format_uuid_or_ascii(&e[0x28], vmId, size);
     }
@@ -1496,11 +1496,7 @@ nvmlReturn_t nvmlVgpuInstanceGetUUID(nvmlVgpuInstance_t vgpuInstance, char *uuid
     if (!uuid || size == 0) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    if (is_printable_ascii_str(&e[0x110], 63)) {
-        snprintf(uuid, size, "%.63s", (const char *)&e[0x110]);
-    } else {
-        format_uuid_or_ascii(&e[0x38], uuid, size);
-    }
+    format_uuid_or_ascii(&e[0x38], uuid, size);
     return NVML_SUCCESS;
 }
 
@@ -1509,13 +1505,7 @@ nvmlReturn_t nvmlVgpuInstanceGetMdevUUID(nvmlVgpuInstance_t vgpuInstance, char *
     if (!mdevUuid || size == 0) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    if (is_printable_ascii_str(&e[0x120], 63)) {
-        snprintf(mdevUuid, size, "%.63s", (const char *)&e[0x120]);
-    } else if (is_printable_ascii_str(&e[0x110], 63)) {
-        snprintf(mdevUuid, size, "%.63s", (const char *)&e[0x110]);
-    } else {
-        format_uuid_or_ascii(&e[0x110], mdevUuid, size);
-    }
+    format_uuid_or_ascii(&e[0x120], mdevUuid, size);
     return NVML_SUCCESS;
 }
 
@@ -1524,8 +1514,8 @@ nvmlReturn_t nvmlVgpuInstanceGetVmDriverVersion(nvmlVgpuInstance_t vgpuInstance,
     if (!version || length == 0) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    if (is_printable_ascii_str(&e[0x78], 63)) {
-        snprintf(version, length, "%.63s", (const char *)&e[0x78]);
+    if (is_printable_ascii_str(&e[0x110], 63)) {
+        snprintf(version, length, "%.63s", (const char *)&e[0x110]);
     } else {
         snprintf(version, length, "N/A");
     }
@@ -1537,7 +1527,17 @@ nvmlReturn_t nvmlVgpuInstanceGetFbUsage(nvmlVgpuInstance_t vgpuInstance, unsigne
     if (!fbUsage) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    *fbUsage = *(uint64_t *)&e[0x138];
+    uint64_t fb = *(uint64_t *)&e[0x138];
+    if (fb == 0) {
+        uint32_t vtype = *(uint32_t *)&e[0x100];
+        if (vtype != 0) {
+            unsigned long long type_fb = 0;
+            if (nvmlVgpuTypeGetFramebufferSize(vtype, &type_fb) == NVML_SUCCESS) {
+                fb = type_fb;
+            }
+        }
+    }
+    *fbUsage = fb;
     return NVML_SUCCESS;
 }
 
@@ -1571,7 +1571,7 @@ nvmlReturn_t nvmlVgpuInstanceGetType(nvmlVgpuInstance_t vgpuInstance, nvmlVgpuTy
     if (!vgpuTypeId) return NVML_ERROR_INVALID_ARGUMENT;
     uint8_t e[0x150];
     if (find_vgpu_instance_entry(vgpuInstance, e) != 0) return NVML_ERROR_NOT_FOUND;
-    *vgpuTypeId = *(uint32_t *)&e[0x08];
+    *vgpuTypeId = *(uint32_t *)&e[0x100];
     return NVML_SUCCESS;
 }
 
