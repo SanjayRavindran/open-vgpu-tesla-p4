@@ -212,6 +212,56 @@ enum {
 #define GP104_MAX_DMA_MAPS         128U
 #define GP104_MAX_CHAN_RECS         128U
 
+/* Exact VGX 0x23.0x05 (535.309.01) Consolidated Static Info Wire Layouts */
+#define GP104_VGPU_STATIC_INFO_BYTES     0x10758U /* 67,416 B across 29 blocks */
+#define GP104_GR_STATIC_INFO_BYTES       0x07b30U /* 31,536 B across 11 blocks */
+#define GP104_STATIC_INFO_CHUNK_MAX      4056U    /* 4096 - 0x20 hdr - 0x08 chunk hdr */
+#define NV_VGPU_ERR_INVALID_CHUNK_RANGE  0xff000001U
+
+/* 0x50 VGPU_STATIC_INFO sub-block wire offsets (libnvidia-vgpu.so @ 0x1910a0) */
+#define GP104_SINFO_OFF_BLK00_SLOT14     0x00000U /* 0x0008 */
+#define GP104_SINFO_OFF_BLK01_SLOT1F     0x00008U /* 0x0008 */
+#define GP104_SINFO_OFF_BLK02_SLOT05     0x00010U /* 0x000c */
+#define GP104_SINFO_OFF_NVLINK_CAPS      0x0001cU /* 0x0010 (slot 0x04 <- 0x20803001) */
+#define GP104_SINFO_OFF_CE_CAPS          0x0002cU /* 0x0b48 (slot 0x16 <- 0x20802a03) */
+#define GP104_SINFO_OFF_PCI_BOOT         0x00b74U /* 0x0024 (slot 0x0a) */
+#define GP104_SINFO_OFF_CORE             0x00b98U /* 0x0fc8 (slot 0x15) */
+#define GP104_SINFO_OFF_INTR_TABLE_1     0x01b60U /* 0x0804 (slot 0x1b <- 0x2080170d) */
+#define GP104_SINFO_OFF_ENGINE_LIST      0x02364U /* 0x05a0 (slot 0x00) */
+#define GP104_SINFO_OFF_BLK09_SLOT23     0x02904U /* 0x0208 */
+#define GP104_SINFO_OFF_BLK10_SLOT0F     0x02b0cU /* 0x0038 */
+#define GP104_SINFO_OFF_LTC_INFO         0x02b44U /* 0x0010 (slot 0x21 <- 0x20801328) */
+#define GP104_SINFO_OFF_FIFO_DEV_TABLE   0x02b54U /* 0x6460 (slot 0x12 <- 0x20801112) */
+#define GP104_SINFO_OFF_BLACKLIST_PAGES  0x08fb4U /* 0x2080 (slot 0x08 <- 0x20801348) */
+#define GP104_SINFO_OFF_BLK14_SLOT18     0x0b034U /* 0x0050 */
+#define GP104_SINFO_OFF_BLK15_SLOT19     0x0b084U /* 0x13d0 */
+#define GP104_SINFO_OFF_BLK16_SLOT27     0x0c454U /* 0x0270 */
+#define GP104_SINFO_OFF_BLK17_SLOT26     0x0c6c4U /* 0x0050 */
+#define GP104_SINFO_OFF_BLK18_SLOT1E     0x0c714U /* 0x0010 */
+#define GP104_SINFO_OFF_BLK19_SLOT0B     0x0c724U /* 0x00c0 */
+#define GP104_SINFO_OFF_BLK20_SLOT20     0x0c7e4U /* 0x01a4 */
+#define GP104_SINFO_OFF_BLK21_SLOT24     0x0c988U /* 0x0010 */
+#define GP104_SINFO_OFF_BLK22_SLOT03     0x0c998U /* 0x0048 */
+#define GP104_SINFO_OFF_BLK23_SLOT25     0x0c9e0U /* 0x0020 */
+#define GP104_SINFO_OFF_INTR_TABLE_2     0x0ca00U /* 0x0204 (slot 0x1a <- 0x2080170e) */
+#define GP104_SINFO_OFF_BLK25_SLOT17     0x0cc04U /* 0x0068 */
+#define GP104_SINFO_OFF_BLK26_SLOT13     0x0cc6cU /* 0x0044 */
+#define GP104_SINFO_OFF_BLK27_SLOT01     0x0ccb0U /* 0x0014 */
+#define GP104_SINFO_OFF_BLK28_SLOT02     0x0ccc4U /* 0x3a94 */
+
+/* 0x9c GR_STATIC_INFO sub-block wire offsets (libnvidia-vgpu.so @ 0x190f30) */
+#define GP104_GRINFO_OFF_SM_ORDER        0x00000U /* 0x0d40 (slot 0x07 <- 0x20800a2a) */
+#define GP104_GRINFO_OFF_KGR_INFO        0x00d40U /* 0x5a20 (slot 0x06 <- 0x20800a22) */
+#define GP104_GRINFO_OFF_ROP_INFO        0x06760U /* 0x0060 (slot 0x1c <- 0x20800a2e) */
+#define GP104_GRINFO_OFF_PPC_MASK        0x067c0U /* 0x0180 (slot 0x0e <- 0x20800a30) */
+#define GP104_GRINFO_OFF_CTX_BUF_INFO    0x06940U /* 0x0640 (slot 0x22 <- 0x20800a32) */
+#define GP104_GRINFO_OFF_RATE_MOD        0x06f80U /* 0x0048 (slot 0x09 <- 0x20800a34) */
+#define GP104_GRINFO_OFF_GPC_MASK        0x06fc8U /* 0x0900 (slot 0x10 <- 0x20800a26) */
+#define GP104_GRINFO_OFF_ZCULL_INFO      0x078c8U /* 0x0140 (slot 0x11 <- 0x20800a2c) */
+#define GP104_GRINFO_OFF_FECS_REC_SZ     0x07a08U /* 0x0020 (slot 0x1d <- 0x20800a3d) */
+#define GP104_GRINFO_OFF_FECS_TRACE      0x07a28U /* 0x0100 (slot 0x0d <- 0x20800a3f) */
+#define GP104_GRINFO_OFF_PDB_PROPS       0x07b28U /* 0x0008 (slot 0x0c <- 0x20800a48) */
+
 typedef struct {
     int      in_use;
     uint32_t region_id;
@@ -349,10 +399,12 @@ typedef struct {
     char     guest_driver_ver[32];
     char     guest_branch_ver[32];
     uint32_t sema_mem_validation;
-    uint8_t  static_info_buf[8192];
+    uint8_t *static_info_buf;
     uint32_t static_info_len;
-    uint8_t  gr_static_info_buf[4096];
+    uint8_t *gr_static_info_buf;
     uint32_t gr_static_info_len;
+    uint32_t static_info_rm_ok_mask;
+    uint32_t gr_static_info_rm_ok_mask;
     uint64_t vrpc_rm_forwarded_calls;
 
     /* Phase 1B Milestone 1B-2 MMU, Direct MMIO, Pinned PFN & Channel Tracking */
@@ -395,6 +447,7 @@ void     gp104_mmu_on_free_obj(gp104_vgpu_dev_t *dev, uint32_t guest_client, uin
 void     gp104_mmu_on_free_client(gp104_vgpu_dev_t *dev, uint32_t guest_client);
 void     gp104_mmu_release_all(gp104_vgpu_dev_t *dev);
 void     gp104_build_static_info_blobs(gp104_vgpu_dev_t *dev);
+void     gp104_free_static_info_blobs(gp104_vgpu_dev_t *dev);
 uint32_t open_vgpu_plugin_record_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp,
                                      uint32_t ho, uint32_t cls);
 uint32_t open_vgpu_plugin_free_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t ho);

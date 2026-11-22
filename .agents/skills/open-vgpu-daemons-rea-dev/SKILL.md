@@ -18,8 +18,9 @@ description: >-
   3. `open-nvidia-xid-logd` (`open-xid-logd/open_xid_logd.c`) -> daemonize/foreground + PID locking + `dlopen("libnvidia-ml.so.1")`, clean non-GSP Pascal exit `0`, Base64 76-char XID debugdump syslog reporter on GSP GPUs.
   4. `open-nvidia-vgpu-mgr` (`open-vgpu-mgr/open_vgpu_mgr.c`, `vmiop_env.c`, `rm_client.c`) -> KVM/VFIO `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d` master/worker runtime daemon, `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), zero-overhead `OPEN_VGPU_PLUGIN_LIB` + `OPEN_VGPU_TRACE_DIR` (`msync` + `memcpy`, **never `/proc/self/mem`** on vGPU mmap pages), and all `60` dynamic `vmiop*` exports + `vmiop_presentation`.
   5. `open-nvidia-smi` & `libopen-nvidia-ml.so` (`open-nvml-smi/open_nvml.c`, `open_nvidia_smi.c`) -> clean-room NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and vGPU instances.
-  6. `libopen-nvidia-vgpu.so` (`open-vgpu-plugin/open_vgpu_plugin.c`, `gp104_vgpu_core.c`, `open_vgpu_rm.c`, `open_vrpc_rm.c`, `open_vrpc_mmu.c`) -> `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) + `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B) standalone GP104 core, host RM `NVA081`/`NVA082` bridge, all `47/47` cataloged live VRPC opcodes (with PFN pinning & BAR1/USERD MMIO aperture forwarding), plus hybrid trace interposer alongside `libnvidia-vgpu.so.535.309.01`.
-  7. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
+  6. `libopen-nvidia-vgpu.so` (`open-vgpu-plugin/open_vgpu_plugin.c`, `gp104_vgpu_core.c`, `open_vgpu_rm.c`, `open_vrpc_rm.c`, `open_vrpc_mmu.c`, `open_vgpu_static_info.c`) -> `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) + `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B) standalone GP104 core, host RM `NVA081`/`NVA082` bridge, all `47/47` cataloged live VRPC opcodes (with PFN pinning & BAR1/USERD MMIO aperture forwarding), exact VGX `0x23.0x05` `0x50` (`0x10758`B) & `0x9c` (`0x7b30`B) binary static-info serializers, plus hybrid trace interposer alongside `libnvidia-vgpu.so.535.309.01`.
+  7. `open-vgpu-guest` (`open-vgpu-guest/open_vgpu_guest_rpc.{h,c}`, `test_host_guest_loopback.c`, `scripts/prepare_open_535_guest_rm.sh`) + `nova_vgpu_guest.ko` (`kmods/nova_vgpu_guest/`) -> Tier 2 Phase 2A clean-room guest BAR0 `0x8f000` VRPC client, zero-blob host↔guest loopback suite, and Linux `7.0` `kbuild`-verified guest transport (`Phase 2B` next: live AlmaLinux 10.3 `open-gpu-kernel-modules@535.309.01` `nvidia.ko` bringup).
+  8. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
 - **Retained Stable Components**: `nvidia.ko` (`nv-kernel.o_binary`) and `libnvidia-vgpu.so.535.309.01` (used behind `libopen-nvidia-vgpu.so` in hybrid mode for live 2-VM VRPC/DRM parity).
 
 ## 1. Running `rea@6.10.1` Static Analysis & Decompilation (`192.168.1.15`)
@@ -53,9 +54,15 @@ make -C open-vgpu-mgr clean all test
 # C open-nvidia-smi + libopen-nvidia-ml.so mock-RM unit tests
 make -C open-nvml-smi clean all test
 
-# C libopen-nvidia-vgpu.so standalone GP104 + 47/47 VRPCs + hybrid trace-interposer unit tests (4 suites)
+# C libopen-nvidia-vgpu.so standalone GP104 + 47/47 VRPCs + 0x50/0x9c binary parity + hybrid trace-interposer (5 suites)
 make -C open-vgpu-plugin clean all test
 
-# Clean build binaries before git commit (CI rejects tracked .so/ELF files)
-make -C open-vgxcfg clean && make -C open-xid-logd clean && make -C open-vgpu-mgr clean && make -C open-nvml-smi clean && make -C open-vgpu-plugin clean
+# C Tier 2 Phase 2A Host <-> Guest zero-blob VRPC loopback test
+make -C open-vgpu-guest clean all test
+
+# Linux 7.0 kbuild check for clean-room guest VRPC kernel module
+make -C kmods/nova_vgpu_guest KVER=7.0.0-43-generic clean all
+
+# Clean build binaries before git commit (CI rejects tracked .so/ELF/.ko files)
+make -C open-vgxcfg clean && make -C open-xid-logd clean && make -C open-vgpu-mgr clean && make -C open-nvml-smi clean && make -C open-vgpu-plugin clean && make -C open-vgpu-guest clean && make -C kmods/nova_vgpu_guest KVER=7.0.0-43-generic clean
 ```

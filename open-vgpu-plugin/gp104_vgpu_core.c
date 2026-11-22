@@ -267,6 +267,7 @@ void gp104_dev_reset(gp104_vgpu_dev_t *dev)
 void gp104_dev_shutdown(gp104_vgpu_dev_t *dev)
 {
     gp104_mmu_release_all(dev);
+    gp104_free_static_info_blobs(dev);
     unmap_ring(&dev->msg_page);
     unmap_ring(&dev->send_ring);
     unmap_ring(&dev->recv_ring);
@@ -597,7 +598,28 @@ uint32_t gp104_handle_vrpc_buffer(gp104_vgpu_dev_t *dev, uint8_t *buf, size_t bu
 
 static void handle_doorbell_dispatch(gp104_vgpu_dev_t *dev)
 {
-    if (dev->msg_page.mapped && dev->msg_page.hva) {
+    uint32_t send_put = dev->vgpu_regs[NV_VGPU_REG_SEND_RING_PUT >> 2] & 0xff8U;
+    uint32_t send_get = dev->vgpu_regs[NV_VGPU_REG_SEND_RING_GET >> 2] & 0xff8U;
+    uint32_t recv_put = dev->vgpu_regs[NV_VGPU_REG_RECV_RING_PUT >> 2] & 0xff8U;
+
+    if (dev->send_ring.mapped && dev->send_ring.hva && send_put != send_get) {
+        /* Advance circular SEND_RING descriptor queue while SEND_RING_GET != SEND_RING_PUT */
+        const uint8_t *slot = (const uint8_t *)dev->send_ring.hva + send_get;
+        uint32_t msg_lo = buf_r32(slot, 0x00);
+        uint32_t msg_hi = buf_r32(slot, 0x04);
+        if ((msg_lo & 8U) != 0U &&
+            update_ring_mapping(dev, &dev->msg_page, msg_lo, msg_hi) == VMIOP_SUCCESS &&
+            dev->msg_page.hva) {
+            gp104_handle_vrpc_buffer(dev, (uint8_t *)dev->msg_page.hva,
+                                     (size_t)dev->msg_page.size);
+        }
+        if (dev->recv_ring.mapped && dev->recv_ring.hva) {
+            memcpy((uint8_t *)dev->recv_ring.hva + recv_put, slot, 8U);
+            recv_put = (recv_put + 8U) & 0xfffU;
+            dev->vgpu_regs[NV_VGPU_REG_RECV_RING_PUT >> 2] = recv_put;
+        }
+        dev->vgpu_regs[NV_VGPU_REG_SEND_RING_GET >> 2] = (send_get + 8U) & 0xfffU;
+    } else if (dev->msg_page.mapped && dev->msg_page.hva) {
         gp104_handle_vrpc_buffer(dev, (uint8_t *)dev->msg_page.hva, (size_t)dev->msg_page.size);
     } else if (dev->send_ring.mapped && dev->send_ring.hva) {
         /* Fallback when MSG_PAGE was mapped directly on SEND_RING entry 0 or pre-bound */
@@ -614,7 +636,9 @@ static void handle_doorbell_dispatch(gp104_vgpu_dev_t *dev)
                 gp104_handle_vrpc_buffer(dev, (uint8_t *)dev->msg_page.hva,
                                          (size_t)dev->msg_page.size);
                 if (dev->recv_ring.mapped && dev->recv_ring.hva) {
-                    memcpy(dev->recv_ring.hva, dev->send_ring.hva, 8U);
+                    memcpy((uint8_t *)dev->recv_ring.hva + recv_put,
+                           dev->send_ring.hva, 8U);
+                    dev->vgpu_regs[NV_VGPU_REG_RECV_RING_PUT >> 2] = (recv_put + 8U) & 0xfffU;
                 }
             }
         }

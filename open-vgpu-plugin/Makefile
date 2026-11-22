@@ -3,8 +3,8 @@ CFLAGS := -O2 -Wall -Wextra -Werror -std=gnu11 -D_GNU_SOURCE
 SHLDFLAGS := -shared -ldl -lpthread -lrt
 
 HDRS := open_vgpu_plugin.h open_vgpu_rm.h ../open-vgpu-mgr/vmiop_env.h ../open-vgpu-mgr/nv_vgpu_vfio_abi.h
-CORE_SRCS := open_vgpu_plugin.c gp104_vgpu_core.c open_vgpu_rm.c open_vrpc_rm.c open_vrpc_mmu.c
-CORE_TEST_SRCS := gp104_vgpu_core.c open_vgpu_rm.c open_vrpc_rm.c open_vrpc_mmu.c
+CORE_SRCS := open_vgpu_plugin.c gp104_vgpu_core.c open_vgpu_rm.c open_vrpc_rm.c open_vrpc_mmu.c open_vgpu_static_info.c
+CORE_TEST_SRCS := gp104_vgpu_core.c open_vgpu_rm.c open_vrpc_rm.c open_vrpc_mmu.c open_vgpu_static_info.c
 
 .PHONY: all test clean
 

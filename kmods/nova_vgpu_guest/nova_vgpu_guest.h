@@ -14,9 +14,7 @@
 #include <linux/types.h>
 #else
 #include <linux/ioctl.h>
-#include <stdint.h>
-typedef uint32_t __u32;
-typedef uint64_t __u64;
+#include <linux/types.h>
 #endif
 
 #define NOVA_VGPU_PCI_VENDOR_NVIDIA      0x10deU
@@ -50,16 +48,29 @@ typedef uint64_t __u64;
 #define NOVA_VRPC_VERSION_3_0            0x03000000U
 #define NOVA_VRPC_HEADER_BYTES           32U
 #define NOVA_VRPC_MAX_PAYLOAD            (4096U - NOVA_VRPC_HEADER_BYTES)
+#define NOVA_VRPC_CHUNK_MAX              4056U
+#define NOVA_VGPU_STATIC_INFO_BYTES      0x10758U /* 67,416 B (0x50 VGX 0x23.0x05) */
+#define NOVA_VGPU_GR_STATIC_INFO_BYTES   0x07b30U /* 31,536 B (0x9c VGX 0x23.0x05) */
 
-#define NOVA_VRPC_FUNC_SET_GUEST_INFO    0x01U
-#define NOVA_VRPC_FUNC_ALLOC_ROOT        0x02U
-#define NOVA_VRPC_FUNC_ALLOC_DEVICE      0x03U
-#define NOVA_VRPC_FUNC_ALLOC_MEMORY      0x04U
-#define NOVA_VRPC_FUNC_ALLOC_CHANNEL_DMA 0x06U
-#define NOVA_VRPC_FUNC_FREE              0x0aU
-#define NOVA_VRPC_FUNC_IDLE_CHANNELS     0x16U
-#define NOVA_VRPC_FUNC_RM_CONTROL        0x1aU
-#define NOVA_VRPC_FUNC_GET_STATIC_INFO   0x32U
+#define NOVA_VRPC_FUNC_SET_GUEST_INFO       0x01U
+#define NOVA_VRPC_FUNC_ALLOC_ROOT           0x02U
+#define NOVA_VRPC_FUNC_ALLOC_DEVICE         0x03U
+#define NOVA_VRPC_FUNC_ALLOC_MEMORY         0x04U
+#define NOVA_VRPC_FUNC_ALLOC_CHANNEL_DMA    0x06U
+#define NOVA_VRPC_FUNC_MAP_MEMORY           0x07U
+#define NOVA_VRPC_FUNC_FREE                 0x0aU
+#define NOVA_VRPC_FUNC_ALLOC_VIDMEM         0x0cU
+#define NOVA_VRPC_FUNC_ALLOC_SUBDEVICE_535  0x13U
+#define NOVA_VRPC_FUNC_IDLE_CHANNELS        0x16U
+#define NOVA_VRPC_FUNC_RM_CONTROL           0x1aU
+#define NOVA_VRPC_FUNC_FILL_PTE_MEM         0x1bU
+#define NOVA_VRPC_FUNC_ALLOC_DEVICE_535     0x20U
+#define NOVA_VRPC_FUNC_GET_STATIC_INFO      0x32U
+#define NOVA_VRPC_FUNC_UPDATE_PDE_2         0x38U
+#define NOVA_VRPC_FUNC_UPDATE_GPU_PDES      0x3dU
+#define NOVA_VRPC_FUNC_SET_GUEST_BRANCH_VER 0x40U
+#define NOVA_VRPC_FUNC_GET_CONSOL_STATIC    0x50U
+#define NOVA_VRPC_FUNC_GET_CONSOL_GR        0x9cU
 
 struct nova_vrpc_header {
 	__u32 version;

@@ -50,36 +50,6 @@ uint32_t gp104_resolve_host_client(gp104_vgpu_dev_t *dev, uint32_t guest_client,
     return open_vgpu_rm_lookup_or_create_guest_client(&dev->rm, guest_client, out_hc, &created);
 }
 
-void gp104_build_static_info_blobs(gp104_vgpu_dev_t *dev)
-{
-    if (!dev) {
-        return;
-    }
-    memset(dev->static_info_buf, 0, sizeof(dev->static_info_buf));
-    dev->static_info_len = 4096U;
-    uint64_t fb = dev->rm.live_fb_length ? dev->rm.live_fb_length : dev->profile.usable_fb_bytes;
-    uint64_t b1 = dev->rm.live_bar1_length ? dev->rm.live_bar1_length : dev->profile.bar1_bytes;
-    uint32_t dev_id = dev->rm.pci_device ? dev->rm.pci_device : dev->profile.device_id;
-    uint32_t sub_id = dev->rm.pci_subsys_device ? dev->rm.pci_subsys_device : dev->profile.subsys_device_id;
-
-    w64(dev->static_info_buf, 0x00, fb);
-    w64(dev->static_info_buf, 0x08, b1);
-    w32(dev->static_info_buf, 0x10, (sub_id << 16) | dev_id);
-    w32(dev->static_info_buf, 0x14, dev->profile.vgpu_type_id);
-    w32(dev->static_info_buf, 0x18, dev->frl_fps);
-    w32(dev->static_info_buf, 0x1c, dev->rm.p2p_cap);
-    w32(dev->static_info_buf, 0x20, dev->rm.encoder_capacity ? dev->rm.encoder_capacity : 100U);
-    snprintf((char *)(dev->static_info_buf + 0x40), 32U, "%.31s",
-             dev->rm.live_profile_name[0] ? dev->rm.live_profile_name : dev->profile.name);
-
-    memset(dev->gr_static_info_buf, 0, sizeof(dev->gr_static_info_buf));
-    dev->gr_static_info_len = 4096U;
-    /* GP104 Pascal (SM 6.1, 10 GPC/TPC baseline exposed consistently) */
-    w32(dev->gr_static_info_buf, 0x00, dev->pmc_boot0);
-    w32(dev->gr_static_info_buf, 0x04, dev->pmc_boot42);
-    w32(dev->gr_static_info_buf, 0x08, 0x00000001U); /* initialized flag */
-}
-
 static uint32_t forward_rm_ctrl(gp104_vgpu_dev_t *dev, uint32_t guest_client, uint32_t h_obj,
                                 uint32_t cmd, void *params, uint32_t params_sz, int use_host_root)
 {
@@ -165,6 +135,11 @@ static uint32_t handle_vrpc_set_guest_info_ext(gp104_vgpu_dev_t *dev, const uint
     if (payload_len >= 4U && payload[0] >= 0x20U && payload[0] < 0x7fU) {
         snprintf(dev->guest_branch_ver, sizeof(dev->guest_branch_ver), "%.31s",
                  (const char *)payload);
+        if (dev->static_info_buf &&
+            dev->static_info_len >= GP104_SINFO_OFF_CORE + 0xee8U) {
+            snprintf((char *)(dev->static_info_buf + GP104_SINFO_OFF_CORE + 0xe68U),
+                     127U, "%.31s", dev->guest_branch_ver);
+        }
     }
     if (!dev->rm.nva082_allocated || dev->rm.ctl_fd < 0) {
         return NV_OK;
@@ -263,12 +238,13 @@ static uint32_t handle_vrpc_static_chunk(const uint8_t *src, uint32_t src_len,
     if ((size_t)chunk + 8U > max_payload_avail || (size_t)chunk + 8U > (size_t)payload_len) {
         return 0xff100002U;
     }
-    memset(payload + 8U, 0, chunk);
-    if (off < src_len) {
-        uint32_t avail = src_len - off;
-        uint32_t n = (chunk < avail) ? chunk : avail;
-        memcpy(payload + 8U, src + off, n);
+    /* Match _nv005312vgpu (0x1bc640.c) & _nv005310vgpu (0x1bc990.c) exact bounds check */
+    if (!src || src_len == 0U || chunk == 0U ||
+        off > src_len || chunk > src_len ||
+        (uint64_t)off + (uint64_t)chunk > (uint64_t)src_len) {
+        return NV_VGPU_ERR_INVALID_CHUNK_RANGE;
     }
+    memcpy(payload + 8U, src + off, chunk);
     return NV_OK;
 }
 
@@ -506,6 +482,9 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
         st = handle_vrpc_set_guest_info_ext(dev, payload, plen);
         break;
     case VRPC_FN_BATCH_50:             /* 0x50 */
+        if (!dev->static_info_buf) {
+            gp104_build_static_info_blobs(dev);
+        }
         st = handle_vrpc_static_chunk(dev->static_info_buf, dev->static_info_len,
                                       payload, plen, avail);
         break;
@@ -591,6 +570,9 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
                                    NV0080_CTRL_CMD_DMA_0x170F, 0x18U, 0x10U, 0);
         break;
     case VRPC_FN_SYNC_9C:              /* 0x9c */
+        if (!dev->gr_static_info_buf) {
+            gp104_build_static_info_blobs(dev);
+        }
         st = handle_vrpc_static_chunk(dev->gr_static_info_buf, dev->gr_static_info_len,
                                       payload, plen, avail);
         break;

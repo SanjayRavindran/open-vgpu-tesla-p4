@@ -323,6 +323,10 @@ static void test_standalone_gp104_end_to_end(void)
         w32(msg, 0x08, live_ops[i].tot);
         w32(msg, 0x0c, live_ops[i].fn);
         w32(msg, 0x10, OPEN_VRPC_PENDING);
+        if (live_ops[i].fn == VRPC_FN_BATCH_50 || live_ops[i].fn == VRPC_FN_SYNC_9C) {
+            w32(msg, 0x20, 0U);
+            w32(msg, 0x24, 24U);
+        }
         assert(bar0_cb(bar0_priv, 1U, VGPU_EMUL_MMIO, 0x8f050ULL, 4U, &bell, &dummy) == 0U);
         assert(r32(msg, 0x10) == 0U);
     }
@@ -594,6 +598,30 @@ static int mock_rm_ioctl(int fd, unsigned long req, void *arg)
         } else if (p->cmd == NV0041_CTRL_CMD_GET_SURFACE_PHYS_ATTR) {
             uint64_t pmmio = 0xfe0010000ULL;
             memcpy((uint8_t *)prm + 0x08, &pmmio, sizeof(pmmio));
+        } else if (p->cmd == NV2080_CTRL_CMD_NVLINK_GET_NVLINK_CAPS) {
+            w32((uint8_t *)prm, 0x00, 0x11223344U);
+        } else if (p->cmd == NV2080_CTRL_CMD_MC_GET_STATIC_INTR_TABLE_1) {
+            w32((uint8_t *)prm, 0x00, 0x55aa170dU);
+        } else if (p->cmd == NV2080_CTRL_CMD_MC_GET_STATIC_INTR_TABLE_2) {
+            w32((uint8_t *)prm, 0x00, 0x66bb170eU);
+        } else if (p->cmd == NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE) {
+            w32((uint8_t *)prm, 0x00, 0x77cc1112U);
+        } else if (p->cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_SM_ORDER) {
+            w32((uint8_t *)prm, 0x00, 0x13400a2aU);
+        } else if (p->cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_INFO) {
+            w32((uint8_t *)prm, 0x00, 0x13400a22U);
+        } else if (p->cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_GPC_MASK) {
+            uint32_t *g = (uint32_t *)prm;
+            for (uint32_t e = 0; e < 8U; e++) {
+                uint32_t *row = g + e * 0x4aU;
+                row[0]    = 0xa0000000U | e;
+                row[1]    = 0xb0000000U | e;
+                row[0x19] = 0xc0000000U | e;
+                row[0x26] = 0xd0000000U | e;
+                row[0x3c] = 0xe0000000U | e;
+            }
+        } else if (p->cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_PDB_PROPS) {
+            w32((uint8_t *)prm, 0x00, 0x000a48ffU);
         }
         p->status = NV_OK;
         return 0;
@@ -682,16 +710,16 @@ static void test_rm_backed_vrpc_and_nva082_lifecycle(void)
     assert(g_mock_rm.last_fb_usage == used_fb);
 
     init_vrpc(vbuf, VRPC_FN_BATCH_50, 2560U);
-    w32(vbuf, 0x20, 0U);
-    w32(vbuf, 0x24, 128U);
+    w32(vbuf, 0x20, GP104_SINFO_OFF_CORE + 0x200U);
+    w32(vbuf, 0x24, 256U);
     assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
-    assert(strcmp((char *)(vbuf + 0x68), "GRID P4-4Q") == 0);
+    assert(strcmp((char *)(vbuf + 0x28 + 0x60), "GRID P4-4Q") == 0);
 
     init_vrpc(vbuf, VRPC_FN_SYNC_9C, 3184U);
-    w32(vbuf, 0x20, 0U);
+    w32(vbuf, 0x20, GP104_GRINFO_OFF_SM_ORDER);
     w32(vbuf, 0x24, 64U);
     assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
-    assert(r32(vbuf, 0x28) == 0x134000a1U);
+    assert(r32(vbuf, 0x28) == 0x13400a2aU);
 
     /* 0x02 ALLOC_ROOT (clash + ok), 0x20 ALLOC_DEV, 0x13 ALLOC_SUBDEV */
     init_vrpc(vbuf, VRPC_FN_ALLOC_ROOT, 140U);
@@ -1113,37 +1141,168 @@ static void test_mmu_channels_pfn_pin_and_bar1_apertures(void)
     printf("  [PASS] test_mmu_channels_pfn_pin_and_bar1_apertures\n");
 }
 
+static void test_consolidated_static_info_v23_05_binary_parity(void)
+{
+    memset(&g_mock_rm, 0, sizeof(g_mock_rm));
+    g_mock_rm.next_host_client = 0xc1d03000U;
+    open_vgpu_rm_sys_ops_t ops = {
+        .open_fn = mock_rm_open, .close_fn = mock_rm_close, .ioctl_fn = mock_rm_ioctl
+    };
+    open_vgpu_rm_set_sys_ops(&ops);
+
+    static gp104_vgpu_dev_t dev;
+    gp104_dev_init_defaults(&dev, 1U, 65U);
+    snprintf(dev.gpu_pci_bdf, sizeof(dev.gpu_pci_bdf), "0000:01:00.0");
+
+    vmiop_env_v2_t env;
+    bind_env(&env);
+    assert(gp104_dev_start(&dev, &env) == VMIOP_SUCCESS);
+
+    static uint8_t vbuf[4096];
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_SYSTEM_INFO, 824U);
+    w32(vbuf, 0x20, 0x23U);
+    w32(vbuf, 0x24, 0x05U);
+    w32(vbuf, 0x28, 0x01U);
+    snprintf((char *)(vbuf + 0x34), 32U, "535.309.01");
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_BRANCH_VER, 296U);
+    snprintf((char *)(vbuf + 0x20), 32U, "r535_00");
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    /* Pull all 17 chunks of 0x50 (16 * 4056 + 2520 = 67416 = 0x10758 B) */
+    uint8_t *assembled_50 = (uint8_t *)calloc(1U, GP104_VGPU_STATIC_INFO_BYTES);
+    assert(assembled_50 != NULL);
+    uint32_t off = 0U;
+    uint32_t chunks_50 = 0U;
+    while (off < GP104_VGPU_STATIC_INFO_BYTES) {
+        uint32_t want = GP104_VGPU_STATIC_INFO_BYTES - off;
+        if (want > GP104_STATIC_INFO_CHUNK_MAX) {
+            want = GP104_STATIC_INFO_CHUNK_MAX;
+        }
+        init_vrpc(vbuf, VRPC_FN_BATCH_50, 0x28U + want);
+        w32(vbuf, 0x20, off);
+        w32(vbuf, 0x24, want);
+        assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+        memcpy(assembled_50 + off, vbuf + 0x28U, want);
+        off += want;
+        chunks_50++;
+    }
+    assert(chunks_50 == 17U && off == GP104_VGPU_STATIC_INFO_BYTES);
+    assert(r32(assembled_50, GP104_SINFO_OFF_NVLINK_CAPS) == 0x11223344U);
+    assert(r64(assembled_50, GP104_SINFO_OFF_CORE + 0x00U) == 0xec000000ULL);
+    assert(r64(assembled_50, GP104_SINFO_OFF_CORE + 0x08U) == 256ULL * 1024ULL * 1024ULL);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0x60U), "535.309.01") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0x260U), "GRID P4-4Q") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xc00U), "535.309.01") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xe68U), "r535_00") == 0);
+    assert(r32(assembled_50, GP104_SINFO_OFF_INTR_TABLE_1) == 0x55aa170dU);
+    assert(r32(assembled_50, GP104_SINFO_OFF_FIFO_DEV_TABLE) == 0x77cc1112U);
+    assert(r32(assembled_50, GP104_SINFO_OFF_INTR_TABLE_2) == 0x66bb170eU);
+    free(assembled_50);
+
+    /* Bounds enforcement matching _nv005312vgpu -> 0xff000001U */
+    init_vrpc(vbuf, VRPC_FN_BATCH_50, 0x28U + 16U);
+    w32(vbuf, 0x20, GP104_VGPU_STATIC_INFO_BYTES);
+    w32(vbuf, 0x24, 16U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_VGPU_ERR_INVALID_CHUNK_RANGE);
+    init_vrpc(vbuf, VRPC_FN_BATCH_50, 0x28U);
+    w32(vbuf, 0x20, 0U);
+    w32(vbuf, 0x24, 0U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_VGPU_ERR_INVALID_CHUNK_RANGE);
+
+    /* Pull all 8 chunks of 0x9c (7 * 4056 + 3144 = 31536 = 0x7b30 B) */
+    uint8_t *assembled_9c = (uint8_t *)calloc(1U, GP104_GR_STATIC_INFO_BYTES);
+    assert(assembled_9c != NULL);
+    off = 0U;
+    uint32_t chunks_9c = 0U;
+    while (off < GP104_GR_STATIC_INFO_BYTES) {
+        uint32_t want = GP104_GR_STATIC_INFO_BYTES - off;
+        if (want > GP104_STATIC_INFO_CHUNK_MAX) {
+            want = GP104_STATIC_INFO_CHUNK_MAX;
+        }
+        init_vrpc(vbuf, VRPC_FN_SYNC_9C, 0x28U + want);
+        w32(vbuf, 0x20, off);
+        w32(vbuf, 0x24, want);
+        assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+        memcpy(assembled_9c + off, vbuf + 0x28U, want);
+        off += want;
+        chunks_9c++;
+    }
+    assert(chunks_9c == 8U && off == GP104_GR_STATIC_INFO_BYTES);
+    assert(r32(assembled_9c, GP104_GRINFO_OFF_SM_ORDER) == 0x13400a2aU);
+    assert(r32(assembled_9c, GP104_GRINFO_OFF_KGR_INFO) == 0x13400a22U);
+    /* Verify exact _nv007054vgpu (0x239210.c) packed entry 7 at stride 0x120 B */
+    const uint32_t *wire_g7 = (const uint32_t *)(const void *)(assembled_9c + GP104_GRINFO_OFF_GPC_MASK + 7U * 0x120U);
+    assert(wire_g7[0] == 0xa0000007U && wire_g7[1] == 0xb0000007U &&
+           wire_g7[0x19] == 0xc0000007U && wire_g7[0x26] == 0xd0000007U &&
+           wire_g7[0x3c] == 0xe0000007U);
+    assert(r32(assembled_9c, GP104_GRINFO_OFF_PDB_PROPS) == 0x000a48ffU);
+    free(assembled_9c);
+
+    init_vrpc(vbuf, VRPC_FN_SYNC_9C, 0x28U + 16U);
+    w32(vbuf, 0x20, GP104_GR_STATIC_INFO_BYTES - 8U);
+    w32(vbuf, 0x24, 16U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_VGPU_ERR_INVALID_CHUNK_RANGE);
+
+    gp104_dev_shutdown(&dev);
+    assert(dev.static_info_buf == NULL && dev.gr_static_info_buf == NULL);
+    open_vgpu_rm_reset_sys_ops();
+    printf("  [PASS] test_consolidated_static_info_v23_05_binary_parity\n");
+}
+
 static int run_live_rm_probe(void)
 {
     open_vgpu_rm_reset_sys_ops();
-    open_vgpu_rm_ctx_t rm;
-    memset(&rm, 0, sizeof(rm));
-    rm.ctl_fd = -1;
-    rm.gpu_fd = -1;
+    static gp104_vgpu_dev_t dev;
+    gp104_dev_init_defaults(&dev, 9U, 65U);
+    snprintf(dev.gpu_pci_bdf, sizeof(dev.gpu_pci_bdf), "0000:01:00.0");
     uint8_t uuid[16] = { 0x11,0x11,0x11,0x11, 0,0, 0,0, 0,0, 0,0,0,0,0,0xfe };
-    NV_STATUS st = open_vgpu_rm_attach(&rm, 9U, 65U, "0000:01:00.0", uuid, (uint32_t)getpid());
-    if (st != NV_OK || !rm.attached) {
+    NV_STATUS st = open_vgpu_rm_attach(&dev.rm, 9U, 65U, "0000:01:00.0", uuid, (uint32_t)getpid());
+    if (st != NV_OK || !dev.rm.attached) {
         fprintf(stderr, "live-rm-probe: open_vgpu_rm_attach failed status=0x%x\n", st);
-        open_vgpu_rm_detach(&rm);
+        open_vgpu_rm_detach(&dev.rm);
+        gp104_free_static_info_blobs(&dev);
         return 1;
     }
 
     uint8_t p2p_v2[0xa8];
     memset(p2p_v2, 0, sizeof(p2p_v2));
-    NV_STATUS p2p_st = open_vgpu_rm_control(rm.ctl_fd, rm.h_root, rm.h_root,
+    NV_STATUS p2p_st = open_vgpu_rm_control(dev.rm.ctl_fd, dev.rm.h_root, dev.rm.h_root,
                                             NV0000_CTRL_CMD_SYSTEM_GET_P2P_CAPS_V2,
                                             p2p_v2, sizeof(p2p_v2));
-    printf("LIVE_RM_PROBE: pci=%04x:%04x subsys=%04x:%04x virt_mode=%u profile=\"%s\" fb=0x%llx bar1=0x%llx frl=%u nva082=%d(0x%x) p2p_v2_st=0x%x\n",
-           rm.pci_vendor, rm.pci_device, rm.pci_subsys_vendor, rm.pci_subsys_device,
-           rm.virt_mode, rm.live_profile_name, (unsigned long long)rm.live_fb_length,
-           (unsigned long long)rm.live_bar1_length, rm.live_frl_config,
-           rm.nva082_allocated, rm.nva082_status, p2p_st);
 
-    int ok = (rm.pci_vendor == 0x10deU && rm.pci_device == 0x1bb3U &&
-              rm.virt_mode == 3U && strcmp(rm.live_profile_name, "GRID P4-4Q") == 0 &&
-              rm.live_fb_length == 0xec000000ULL &&
-              rm.live_bar1_length == 256ULL * 1024ULL * 1024ULL);
-    open_vgpu_rm_detach(&rm);
+    gp104_build_static_info_blobs(&dev);
+
+    uint8_t kgr_probe[0xd40];
+    memset(kgr_probe, 0, sizeof(kgr_probe));
+    NV_STATUS kgr_st = open_vgpu_rm_control(dev.rm.ctl_fd, dev.rm.h_root, dev.rm.h_subdev,
+                                            NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_SM_ORDER,
+                                            kgr_probe, sizeof(kgr_probe));
+    uint8_t intr1_probe[0x804];
+    memset(intr1_probe, 0, sizeof(intr1_probe));
+    NV_STATUS intr1_st = open_vgpu_rm_control(dev.rm.ctl_fd, dev.rm.h_root, dev.rm.h_subdev,
+                                              NV2080_CTRL_CMD_MC_GET_STATIC_INTR_TABLE_1,
+                                              intr1_probe, sizeof(intr1_probe));
+
+    printf("LIVE_RM_PROBE: pci=%04x:%04x subsys=%04x:%04x virt_mode=%u profile=\"%s\" fb=0x%llx bar1=0x%llx frl=%u nva082=%d(0x%x) p2p_v2_st=0x%x static_info=0x%x(%u B) ok_mask=0x%02x gr_static_info=0x%x(%u B) gr_ok_mask=0x%03x kgr_st=0x%x intr1_st=0x%x\n",
+           dev.rm.pci_vendor, dev.rm.pci_device, dev.rm.pci_subsys_vendor, dev.rm.pci_subsys_device,
+           dev.rm.virt_mode, dev.rm.live_profile_name, (unsigned long long)dev.rm.live_fb_length,
+           (unsigned long long)dev.rm.live_bar1_length, dev.rm.live_frl_config,
+           dev.rm.nva082_allocated, dev.rm.nva082_status, p2p_st,
+           dev.static_info_len, dev.static_info_len, dev.static_info_rm_ok_mask,
+           dev.gr_static_info_len, dev.gr_static_info_len, dev.gr_static_info_rm_ok_mask,
+           kgr_st, intr1_st);
+
+    int ok = (dev.rm.pci_vendor == 0x10deU && dev.rm.pci_device == 0x1bb3U &&
+              dev.rm.virt_mode == 3U && strcmp(dev.rm.live_profile_name, "GRID P4-4Q") == 0 &&
+              dev.rm.live_fb_length == 0xec000000ULL &&
+              dev.rm.live_bar1_length == 256ULL * 1024ULL * 1024ULL &&
+              dev.static_info_len == GP104_VGPU_STATIC_INFO_BYTES &&
+              dev.gr_static_info_len == GP104_GR_STATIC_INFO_BYTES &&
+              dev.static_info_rm_ok_mask != 0U);
+    gp104_free_static_info_blobs(&dev);
+    open_vgpu_rm_detach(&dev.rm);
     return ok ? 0 : 2;
 }
 
@@ -1157,6 +1316,7 @@ int main(int argc, char **argv)
     test_hybrid_interposer_and_trace();
     test_rm_backed_vrpc_and_nva082_lifecycle();
     test_mmu_channels_pfn_pin_and_bar1_apertures();
+    test_consolidated_static_info_v23_05_binary_parity();
     printf("ALL open-nvidia-vgpu PLUGIN UNIT TESTS PASSED!\n");
     return 0;
 }

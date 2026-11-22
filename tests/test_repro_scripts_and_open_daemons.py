@@ -81,12 +81,19 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-vgpu-plugin" / "open_vgpu_rm.c",
             ROOT / "open-vgpu-plugin" / "open_vrpc_rm.c",
             ROOT / "open-vgpu-plugin" / "open_vrpc_mmu.c",
+            ROOT / "open-vgpu-plugin" / "open_vgpu_static_info.c",
             ROOT / "open-vgpu-plugin" / "open_vgpu_plugin.c",
             ROOT / "open-vgpu-plugin" / "mock_vendor_vgpu.c",
             ROOT / "open-vgpu-plugin" / "test_vgpu_plugin_unit.c",
             ROOT / "open-vgpu-plugin" / "vmiop_plugin.map",
             ROOT / "open-vgpu-plugin" / "Makefile",
+            ROOT / "open-vgpu-guest" / "open_vgpu_guest_rpc.h",
+            ROOT / "open-vgpu-guest" / "open_vgpu_guest_rpc.c",
+            ROOT / "open-vgpu-guest" / "test_host_guest_loopback.c",
+            ROOT / "open-vgpu-guest" / "Makefile",
+            ROOT / "open-vgpu-guest" / "scripts" / "prepare_open_535_guest_rm.sh",
             ROOT / "docs" / "12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md",
+            ROOT / "docs" / "13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
             ROOT / "nova-vgpu" / "src" / "bin" / "open_nvidia_vgpud.rs",
         ]
@@ -126,6 +133,7 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "scripts" / "setup_proxmox_vgpu_vms.sh",
             ROOT / "scripts" / "provision_alma_guest.sh",
             ROOT / "open-xid-logd" / "test_xid_logd.sh",
+            ROOT / "open-vgpu-guest" / "scripts" / "prepare_open_535_guest_rm.sh",
         ]
         for s in scripts:
             self.assertTrue(s.is_file(), f"Missing script {s}")
@@ -161,6 +169,7 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
                 "--dry-run",
             ],
             ["bash", str(ROOT / "scripts" / "provision_alma_guest.sh"), "--dry-run", "--with-selkies"],
+            ["bash", str(ROOT / "open-vgpu-guest" / "scripts" / "prepare_open_535_guest_rm.sh"), "--dry-run"],
         ]
         for cmd in dry_cases:
             r = subprocess.run(cmd, capture_output=True, text=True)

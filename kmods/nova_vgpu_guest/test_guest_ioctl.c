@@ -39,7 +39,86 @@ static int issue_vrpc(int fd, uint32_t func, uint32_t flags, void *payload, uint
 	return 0;
 }
 
-int main(void)
+static int run_probe_535(int fd)
+{
+	uint8_t sys_info[792];
+	uint8_t branch[264];
+	uint8_t chunk[8U + NOVA_VRPC_CHUNK_MAX];
+	uint32_t res = 0U;
+
+	memset(sys_info, 0, sizeof(sys_info));
+	uint32_t vgx_maj = 0x23U, vgx_min = 0x05U, os_type = 1U;
+	memcpy(sys_info + 0x00, &vgx_maj, 4U);
+	memcpy(sys_info + 0x04, &vgx_min, 4U);
+	memcpy(sys_info + 0x08, &os_type, 4U);
+	snprintf((char *)(sys_info + 0x14), 32U, "535.309.01");
+	if (issue_vrpc(fd, NOVA_VRPC_FUNC_SET_GUEST_INFO, 0U, sys_info,
+		       (uint32_t)sizeof(sys_info), &res) < 0 || res != 0U) {
+		fprintf(stderr, "535 SET_GUEST_SYSTEM_INFO failed: res=0x%x\n", res);
+		return 1;
+	}
+
+	memset(branch, 0, sizeof(branch));
+	snprintf((char *)branch, 32U, "r535_00");
+	if (issue_vrpc(fd, NOVA_VRPC_FUNC_SET_GUEST_BRANCH_VER, 0U, branch,
+		       (uint32_t)sizeof(branch), &res) < 0 || res != 0U) {
+		fprintf(stderr, "535 SET_GUEST_BRANCH_VER failed: res=0x%x\n", res);
+		return 1;
+	}
+
+	uint8_t *blob50 = calloc(1U, NOVA_VGPU_STATIC_INFO_BYTES);
+	uint8_t *blob9c = calloc(1U, NOVA_VGPU_GR_STATIC_INFO_BYTES);
+	if (!blob50 || !blob9c) {
+		free(blob50);
+		free(blob9c);
+		return 1;
+	}
+
+	for (uint32_t off = 0U; off < NOVA_VGPU_STATIC_INFO_BYTES; ) {
+		uint32_t want = NOVA_VGPU_STATIC_INFO_BYTES - off;
+		if (want > NOVA_VRPC_CHUNK_MAX)
+			want = NOVA_VRPC_CHUNK_MAX;
+		memset(chunk, 0, 8U + want);
+		memcpy(chunk + 0U, &off, 4U);
+		memcpy(chunk + 4U, &want, 4U);
+		if (issue_vrpc(fd, NOVA_VRPC_FUNC_GET_CONSOL_STATIC, 0U, chunk,
+			       8U + want, &res) < 0 || res != 0U) {
+			fprintf(stderr, "535 0x50 chunk off=0x%x failed: res=0x%x\n", off, res);
+			free(blob50);
+			free(blob9c);
+			return 1;
+		}
+		memcpy(blob50 + off, chunk + 8U, want);
+		off += want;
+	}
+
+	for (uint32_t off = 0U; off < NOVA_VGPU_GR_STATIC_INFO_BYTES; ) {
+		uint32_t want = NOVA_VGPU_GR_STATIC_INFO_BYTES - off;
+		if (want > NOVA_VRPC_CHUNK_MAX)
+			want = NOVA_VRPC_CHUNK_MAX;
+		memset(chunk, 0, 8U + want);
+		memcpy(chunk + 0U, &off, 4U);
+		memcpy(chunk + 4U, &want, 4U);
+		if (issue_vrpc(fd, NOVA_VRPC_FUNC_GET_CONSOL_GR, 0U, chunk,
+			       8U + want, &res) < 0 || res != 0U) {
+			fprintf(stderr, "535 0x9c chunk off=0x%x failed: res=0x%x\n", off, res);
+			free(blob50);
+			free(blob9c);
+			return 1;
+		}
+		memcpy(blob9c + off, chunk + 8U, want);
+		off += want;
+	}
+
+	printf("PROBE_535_OK: 0x50=%u B profile=\"%.31s\" 0x9c=%u B\n",
+	       NOVA_VGPU_STATIC_INFO_BYTES, (const char *)(blob50 + 0xdf8U),
+	       NOVA_VGPU_GR_STATIC_INFO_BYTES);
+	free(blob50);
+	free(blob9c);
+	return 0;
+}
+
+int main(int argc, char **argv)
 {
 	struct nova_vgpu_guest_info info;
 	struct nova_vgpu_guest_reg_op rop;
@@ -55,6 +134,12 @@ int main(void)
 	if (fd < 0)
 		fail("open /dev/nova-vgpu-guest0");
 
+	if (argc > 1 && strcmp(argv[1], "--probe-535") == 0) {
+		int rc = run_probe_535(fd);
+		close(fd);
+		return rc;
+	}
+
 	if (ioctl(fd, NOVA_VGPU_GUEST_IOCTL_GET_INFO, &info) < 0)
 		fail("GET_INFO initial");
 
@@ -63,7 +148,7 @@ int main(void)
 	       (unsigned long long)info.virtual_fb_bytes, (unsigned long long)info.bar1_bytes);
 
 	if (info.pmc_boot0 != 0x134000a1U || (info.vgpu_config & 1U) == 0 ||
-	    info.virtual_fb_bytes != 0x74000000ULL) {
+	    (info.virtual_fb_bytes != 0x74000000ULL && info.virtual_fb_bytes != 0xec000000ULL)) {
 		fprintf(stderr, "Unexpected GET_INFO geometry!\n");
 		return 1;
 	}
@@ -113,7 +198,9 @@ int main(void)
 	memcpy(&subsys_id, payload + 10, 2);
 	printf("VRPC GET_STATIC_INFO result=0x%x fb=0x%llx dev=0x%04x subsys=0x%04x\n",
 	       res, (unsigned long long)fb_bytes, dev_id, subsys_id);
-	if (fb_bytes != 0x74000000ULL || dev_id != 0x1bb3U || subsys_id != 0x1205U)
+	if ((fb_bytes != 0x74000000ULL && fb_bytes != 0xec000000ULL) ||
+	    dev_id != 0x1bb3U ||
+	    (subsys_id != 0x1205U && subsys_id != 0x1206U))
 		return 1;
 
 	/* 4. AllocRoot, AllocDevice, AllocMemory, AllocChannelDma, RmControl */
