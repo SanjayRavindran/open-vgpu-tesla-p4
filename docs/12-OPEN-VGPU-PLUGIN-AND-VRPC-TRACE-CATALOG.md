@@ -134,51 +134,51 @@ Every VRPC message observed used header version `0x03000000` (bytes `00 00 00 03
 |---|---|---|---|
 | `0x01` | `VRPC_FN_SET_GUEST_SYSTEM_INFO` | `1` (`824`) | `1` (`824`) |
 | `0x02` | `VRPC_FN_ALLOC_ROOT` | `43` (`140`) | `50` (`140`) |
-| `0x04` | `VRPC_FN_ALLOC_DEVICE` | `122` (`88`) | `31` (`88`) |
-| `0x05` | `VRPC_FN_ALLOC_SUBDEVICE` | `5` (`88`) | — |
-| `0x06` | `VRPC_FN_ALLOC_MEMORY` | `42` (`280`) | `31` (`280`) |
-| `0x07` | `VRPC_FN_ALLOC_OBJECT` | `3` (`88`) | `6` (`88`) |
-| `0x09` | `VRPC_FN_FREE` | `107` (`112`) | `214` (`112`) |
-| `0x0a` | `VRPC_FN_CONTROL` | `513` (`48`) | `9` (`48`) |
-| `0x0c` | `VRPC_FN_MAP_MEMORY` | `449` (`128`) | `9` (`128`) |
-| `0x0e` | `VRPC_FN_MAP_MEMORY_DMA` | `539` (`88`) | `54` (`88`) |
-| `0x0f` | `VRPC_FN_UNMAP_MEMORY_DMA` | `328` (`72`) | — |
-| `0x13` | `VRPC_FN_SET_OBJECT` | `47` (`72`) | `50` (`72`) |
-| `0x15` | `VRPC_FN_OP_15` | `14` (`60`) | `28` (`60`) |
-| `0x17` | `VRPC_FN_OP_17` | `24` (`60`) | `11` (`60`) |
-| `0x1a` | `VRPC_FN_RM_API_CONTROL` | `78` (`64`) | `125` (`64`) |
-| `0x1b` | `VRPC_FN_OP_1B` | — | `3,804` (`136`) |
-| `0x1c` | `VRPC_FN_OP_1C` | — | `17` (`152`) |
-| `0x20` | `VRPC_FN_SET_GUEST_FB_INFO` | `43` (`96`) | `50` (`96`) |
-| `0x21` | `VRPC_FN_SET_GUEST_SEMA_MEM` | — | `6` (`128`) |
-| `0x2b` | `VRPC_FN_OP_2B` | — | `5` (`56`) |
-| `0x34` | `VRPC_FN_OP_34` | `165` (`128`) | `11` (`128`) |
-| `0x38` | `VRPC_FN_OP_38` | — | `2,777` (`96`) |
-| `0x39` | `VRPC_FN_OP_39` | `2` (`52`) | `2` (`52`) |
-| `0x3b` | `VRPC_FN_OP_3B` | — | `1` (`36`) |
-| `0x3d` | `VRPC_FN_OP_3D` | — | `4` (`80`) |
-| `0x3e` | `VRPC_FN_OP_3E` | `3` (`44`) | — |
-| `0x3f` | `VRPC_FN_SET_GUEST_SYSTEM_EXT` | `6` (`48`) | `6` (`48`) |
-| `0x40` | `VRPC_FN_SET_GUEST_BRANCH_VER` (`"r539_72"`) | `1` (`296`) | `1` (`296`) |
-| `0x50` | `VRPC_FN_BATCH_50` | `17` (`2560, 4096`) | `17` (`2560, 4096`) |
-| `0x55` | `VRPC_FN_GET_STATIC_INFO` | — | `3` (`40`) |
-| `0x5b` | `VRPC_FN_OP_5B` | — | `23` (`1584`) |
-| `0x5c` | `VRPC_FN_OP_5C` | `7` (`48`) | `3` (`48`) |
-| `0x61` | `VRPC_FN_OP_61` | `28` (`48`) | `31` (`48`) |
-| `0x62` | `VRPC_FN_OP_62` | `2` (`48`) | `4` (`48`) |
-| `0x6e` | `VRPC_FN_OP_6E` | `2` (`44`) | — |
-| `0x70` | `VRPC_FN_OP_70` | `3` (`144`) | `7` (`144`) |
-| `0x71` | `VRPC_FN_OP_71` | `2` (`72`) | — |
-| `0x72` | `VRPC_FN_OP_72` | `3` (`64`) | `3` (`64`) |
-| `0x78` | `VRPC_FN_OP_78` | — | `5` (`44`) |
-| `0x79` | `VRPC_FN_OP_79` | `18` (`48`) | `4` (`48`) |
-| `0x7a` | `VRPC_FN_OP_7A` | `135` (`96`) | — |
-| `0x7c` | `VRPC_FN_OP_7C` | `2` (`3120`) | — |
-| `0x7d` | `VRPC_FN_OP_7D` | — | `1` (`196`) |
-| `0x7e` | `VRPC_FN_OP_7E` | `2` (`1392`) | — |
-| `0x8e` | `VRPC_FN_OP_8E` | — | `4` (`476`) |
-| `0x8f` | `VRPC_FN_OP_8F` | — | `14` (`56`) |
-| `0x9c` | `VRPC_FN_SYNC_9C` | `8` (`3184, 4096`) | `8` (`3184, 4096`) |
+| `0x04` | `VRPC_FN_ALLOC_MEMORY_535` (`ALLOC_MEMORY` + PFN pin) | `122` (`88`) | `31` (`88`) |
+| `0x05` | `VRPC_FN_ALLOC_CTX_DMA_535` (`ALLOC_CTX_DMA`) | `5` (`88`) | — |
+| `0x06` | `VRPC_FN_ALLOC_CHANNEL_DMA_535` (`ALLOC_CHANNEL_DMA` + USERD) | `42` (`280`) | `31` (`280`) |
+| `0x07` | `VRPC_FN_MAP_MEMORY_535` (`MAP_MEMORY` BAR1 + `region_map`) | `3` (`88`) | `6` (`88`) |
+| `0x09` | `VRPC_FN_ALLOC_OBJECT_535` (`ALLOC_OBJECT`) | `107` (`112`) | `214` (`112`) |
+| `0x0a` | `VRPC_FN_FREE_535` (`FREE`) | `513` (`48`) | `9` (`48`) |
+| `0x0c` | `VRPC_FN_ALLOC_VIDMEM_535` (`ALLOC_VIDMEM`) | `449` (`128`) | `9` (`128`) |
+| `0x0e` | `VRPC_FN_MAP_MEMORY_DMA` (`NV_ESC_RM_MAP_MEMORY_DMA`) | `539` (`88`) | `54` (`88`) |
+| `0x0f` | `VRPC_FN_UNMAP_MEMORY_DMA` (`NV_ESC_RM_UNMAP_MEMORY_DMA`) | `328` (`72`) | — |
+| `0x13` | `VRPC_FN_SET_OBJECT` (`ALLOC_SUBDEVICE`) | `47` (`72`) | `50` (`72`) |
+| `0x15` | `VRPC_FN_DUP_OBJECT_535` (`DUP_OBJECT`) | `14` (`60`) | `28` (`60`) |
+| `0x17` | `VRPC_FN_IDLE_CHANNELS_V535` (`IDLE_CHANNELS`) | `24` (`60`) | `11` (`60`) |
+| `0x1a` | `VRPC_FN_RM_API_CONTROL` (`RM_API_CONTROL`) | `78` (`64`) | `125` (`64`) |
+| `0x1b` | `VRPC_FN_FILL_PTE_MEM` (`0x00801802`) | — | `3,804` (`136`) |
+| `0x1c` | `VRPC_FN_ALLOC_HWRES` (`NV01_MEMORY_HW_RESOURCES` `0xb1`) | — | `17` (`152`) |
+| `0x20` | `VRPC_FN_SET_GUEST_FB_INFO` (`ALLOC_DEVICE` `0x80`) | `43` (`96`) | `50` (`96`) |
+| `0x21` | `VRPC_FN_DEFERRED_API_535` (`NV5080_CTRL_CMD_DEFERRED_API_V2`) | — | `6` (`128`) |
+| `0x2b` | `VRPC_FN_MAP_SEMA_MEM_535` (`MAP_SEMA_MEM`) | — | `5` (`56`) |
+| `0x34` | `VRPC_FN_ALLOC_VIRTMEM_535` (`NV50_MEMORY_VIRTUAL` `0x50a0`) | `165` (`128`) | `11` (`128`) |
+| `0x38` | `VRPC_FN_UPDATE_PDE_2` (`0x00801809`) | — | `2,777` (`96`) |
+| `0x39` | `VRPC_FN_SET_LICENSE_STATE` (`0xa0820104`) | `2` (`52`) | `2` (`52`) |
+| `0x3b` | `VRPC_FN_SET_SEMA_VALIDATION` | — | `1` (`36`) |
+| `0x3d` | `VRPC_FN_UPDATE_GPU_PDES` (`0x00801808`/`0x0080180a`) | — | `4` (`80`) |
+| `0x3e` | `VRPC_FN_GET_ENCODER_CAPACITY` (`0xa082010d`) | `3` (`44`) | — |
+| `0x3f` | `VRPC_FN_VGPU_PF_REG_READ32` | `6` (`48`) | `6` (`48`) |
+| `0x40` | `VRPC_FN_SET_GUEST_BRANCH_VER` (`0xa0820103`, `"r539_72"`) | `1` (`296`) | `1` (`296`) |
+| `0x50` | `VRPC_FN_GET_CONSOL_STATIC_535` (`VGPU_STATIC_INFO`) | `17` (`2560, 4096`) | `17` (`2560, 4096`) |
+| `0x55` | `VRPC_FN_GET_STATIC_INFO` (`0xa0820110` on `40`B wire) | — | `3` (`40`) |
+| `0x5b` | `VRPC_FN_GR_CTXSW_ZCULL` (`0x20809004`) | — | `23` (`1584`) |
+| `0x5c` | `VRPC_FN_FB_GET_INFO_200A` (`0x2080200a`) | `7` (`48`) | `3` (`48`) |
+| `0x61` | `VRPC_FN_GPFIFO_SCHEDULE` (`0xa06c0101`/`0xa06f0103`) | `28` (`48`) | `31` (`48`) |
+| `0x62` | `VRPC_FN_TSG_CTRL` (`0xa06c0103`) | `2` (`48`) | `4` (`48`) |
+| `0x6e` | `VRPC_FN_SM_DEBUG_CTRL` (`0x83de0309`) | `2` (`44`) | — |
+| `0x70` | `VRPC_FN_GR_GFXP_PREEMPT` (`0x20801211`) | `3` (`144`) | `7` (`144`) |
+| `0x71` | `VRPC_FN_GR_CTRL_1210` (`0x20801210`) | `2` (`72`) | — |
+| `0x72` | `VRPC_FN_GR_CTRL_1208` (`0x20801208`) | `3` (`64`) | `3` (`64`) |
+| `0x78` | `VRPC_FN_DEV_CTRL_1812` (`0x00801812`) | — | `5` (`44`) |
+| `0x79` | `VRPC_FN_PERF_CTRL_2A02` (`0x20802a02`) | `18` (`48`) | `4` (`48`) |
+| `0x7a` | `VRPC_FN_ZBC_CTRL_0107` (`0x90960107`) | `135` (`96`) | — |
+| `0x7c` | `VRPC_FN_PERF_CTRL_3002` (`0x20803002`) | `2` (`3120`) | — |
+| `0x7d` | `VRPC_FN_SYS_CTRL_0127` (`0x00000127`) | — | `1` (`196`) |
+| `0x7e` | `VRPC_FN_SYS_CTRL_013A` (`0x0000013a`) | `2` (`1392`) | — |
+| `0x8e` | `VRPC_FN_FB_GET_INFO_8E` (`FbGetInfo`) | — | `4` (`476`) |
+| `0x8f` | `VRPC_FN_DEV_CTRL_170F` (`0x0080170f`) | — | `14` (`56`) |
+| `0x9c` | `VRPC_FN_GET_CONSOL_GR_535` (`GR_STATIC_INFO`) | `8` (`3184, 4096`) | `8` (`3184, 4096`) |
 
 ---
 
@@ -198,5 +198,10 @@ Every VRPC message observed used header version `0x03000000` (bytes `00 00 00 03
    - **RM Client/Object Lifecycle**: `0x02` (`ALLOC_ROOT` + `0x00000902`), `0x0a` (`FREE`), `0x13` (`ALLOC_SUBDEVICE`), `0x15` (`DUP_OBJECT` `0x34`), `0x17` (`IDLE_CHANNELS`), `0x20` (`ALLOC_DEVICE` `NV01_DEVICE_0`).
    - **RM Controls (`_nv000772vgpu` forwarders & FB info)**: `0x1a` (inline `RM_API_CONTROL`), `0x5b` (`0x20809004`), `0x5c` (`0x2080200a`), `0x61` (`0xa06c0101`/`0xa06f0103`), `0x62` (`0xa06c0103`), `0x6e` (`0x83de0309`), `0x70` (`0x20801211`), `0x71` (`0x20801210`), `0x72` (`0x20801208`), `0x78` (`0x00801812`), `0x79` (`0x20802a02`), `0x7a` (`0x90960107`), `0x7c` (`0x20803002`), `0x7d` (`0x00000127`), `0x7e` (`0x0000013a`), `0x8e` (`FbGetInfo`), `0x8f` (`0x0080170f`).
 
-3. **Remaining Milestone 1B-2 Scope (`15` Memory / MMU / Channel / PTE-Blit Opcodes)**:
-   - `0x04` (`ALLOC_MEMORY`), `0x05` (`ALLOC_CTX_DMA`), `0x06` (`ALLOC_CHANNEL_DMA`), `0x07` (`ALLOC_BAR1_VASPACE`), `0x09` (`ALLOC_OBJECT`), `0x0c` (`ALLOC_VIDMEM` / guest PFN check), `0x0e` (`MAP_MEMORY_DMA`), `0x0f` (`UNMAP_MEMORY_DMA`), `0x1b` (`FILL_PTE_MEM`), `0x1c` (`ALLOC_HWRES`), `0x21` (`SET_SEMA_MEM`), `0x2b` (`MAP_SEMA_MEM`), `0x34` (`MAP_BAR1_MEMORY`), `0x38` (`UPDATE_PDE_2`), `0x3d` (`UPDATE_GPU_PDES`) plus `vmiop_map_guest_region` direct BAR1/USERD aperture forwarding for standalone 2-VM boot.
+3. **Phase 1B Milestone 1B-2 (`open_vrpc_mmu.c`) — All `47/47` Cataloged VRPCs Implemented**:
+   - **Memory & PFN Pinning (`0x04`, `0x05`, `0x0c`, `0x1c`, `0x34`)**: `ALLOC_MEMORY` (`vmiop_pin_guest_pages_v2` -> `NV01_MEMORY_LIST_SYSTEM` `0x81`, with automatic `unpin_pages` on `0x0a` `FREE`, `reset`, and `shutdown`), `ALLOC_CTX_DMA` (`NV01_CONTEXT_DMA`), `ALLOC_VIDMEM` (guest FB PFN bounds check against `usable_fb_bytes`), `ALLOC_HWRES` (`0xb1`), and `ALLOC_VIRTUAL_MEMORY` (`NV50_MEMORY_VIRTUAL` `0x50a0`).
+   - **Channel, MMU & PTE Blit (`0x06`, `0x07`, `0x09`, `0x0e`, `0x0f`, `0x1b`, `0x21`, `0x2b`, `0x38`, `0x3d`)**: `ALLOC_CHANNEL_DMA` (exact `0x906f..0xc86f` class validation, power-of-2 `gpFifoEntries`, faithful `0x55` unlicensed channel limit, USERD `0x1000`-byte direct MMIO forwarding), `MAP_MEMORY` (`NV_ESC_RM_MAP_MEMORY` + `0x410114` + BAR1 direct MMIO forwarding), `ALLOC_OBJECT`, `MAP_MEMORY_DMA`/`UNMAP_MEMORY_DMA` (`NV_ESC_RM_MAP_MEMORY_DMA`/`UNMAP_MEMORY_DMA`), `FILL_PTE_MEM` (`0x00801802`), `DEFERRED_API_CONTROL` (`0x50800103` with exact subcmd allowlist), `MAP_SEMA_MEM`, `UPDATE_PDE_2` (`0x00801809`), and `UPDATE_GPU_PDES` (`0x00801808`/`0x0080180a`).
+   - **Ref-Counted Direct MMIO Aperture Tracker (`gp104_guest_region_map`)**: Passes `bar1_region_id` / `bar0_region_id` (preserving instance ID encoding in `open-vgpu-mgr`) to `vmiop_map_guest_region` with deduplicated add/remove reference counting and zero-leak cleanup.
+
+4. **Remaining Milestone 1B-3 Scope**:
+   - Match exact `0x50` (`VGPU_STATIC_INFO`) and `0x9c` (`GR_STATIC_INFO`) binary struct layouts expected by live Linux/Windows guest RM drivers, then validate standalone 2-VM boot on `192.168.1.24` (with vendor DLS licensing excluded per policy).

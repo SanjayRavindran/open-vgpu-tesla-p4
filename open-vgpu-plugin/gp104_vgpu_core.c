@@ -250,6 +250,7 @@ uint32_t gp104_dev_start(gp104_vgpu_dev_t *dev, const vmiop_env_v2_t *env)
 
 void gp104_dev_reset(gp104_vgpu_dev_t *dev)
 {
+    gp104_mmu_release_all(dev);
     unmap_ring(&dev->msg_page);
     unmap_ring(&dev->send_ring);
     unmap_ring(&dev->recv_ring);
@@ -265,6 +266,7 @@ void gp104_dev_reset(gp104_vgpu_dev_t *dev)
 
 void gp104_dev_shutdown(gp104_vgpu_dev_t *dev)
 {
+    gp104_mmu_release_all(dev);
     unmap_ring(&dev->msg_page);
     unmap_ring(&dev->send_ring);
     unmap_ring(&dev->recv_ring);

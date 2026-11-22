@@ -57,14 +57,20 @@ enum {
     VRPC_FN_SET_GUEST_SYSTEM_INFO  = 0x01U,
     VRPC_FN_ALLOC_ROOT             = 0x02U,
     VRPC_FN_ALLOC_DEVICE_535       = 0x03U,
+    VRPC_FN_ALLOC_MEMORY_535       = 0x04U,
     VRPC_FN_ALLOC_DEVICE           = 0x04U,
+    VRPC_FN_ALLOC_CTX_DMA_535      = 0x05U,
     VRPC_FN_ALLOC_SUBDEVICE        = 0x05U,
+    VRPC_FN_ALLOC_CHANNEL_DMA_535  = 0x06U,
     VRPC_FN_ALLOC_MEMORY           = 0x06U,
+    VRPC_FN_MAP_MEMORY_535         = 0x07U,
     VRPC_FN_ALLOC_OBJECT           = 0x07U,
+    VRPC_FN_ALLOC_OBJECT_535       = 0x09U,
     VRPC_FN_FREE                   = 0x09U,
     VRPC_FN_FREE_535               = 0x0aU,
     VRPC_FN_CONTROL                = 0x0aU,
     VRPC_FN_ALLOC_CHANNEL_DMA      = 0x0bU,
+    VRPC_FN_ALLOC_VIDMEM_535       = 0x0cU,
     VRPC_FN_MAP_MEMORY             = 0x0cU,
     VRPC_FN_UNMAP_MEMORY           = 0x0dU,
     VRPC_FN_MAP_MEMORY_DMA         = 0x0eU,
@@ -84,12 +90,15 @@ enum {
     VRPC_FN_ALLOC_HWRES            = 0x1cU,
     VRPC_FN_GET_ENGINE_INFO        = 0x1eU,
     VRPC_FN_SET_GUEST_FB_INFO      = 0x20U,
+    VRPC_FN_DEFERRED_API_535       = 0x21U,
     VRPC_FN_SET_GUEST_SEMA_MEM     = 0x21U,
     VRPC_FN_UNSET_GUEST_SEMA_MEM   = 0x22U,
     VRPC_FN_SET_GUEST_BAR1_INFO    = 0x24U,
     VRPC_FN_LOG                    = 0x25U,
+    VRPC_FN_MAP_SEMA_MEM_535       = 0x2bU,
     VRPC_FN_OP_2B                  = 0x2bU,
     VRPC_FN_GET_STATIC_INFO_535    = 0x32U,
+    VRPC_FN_ALLOC_VIRTMEM_535      = 0x34U,
     VRPC_FN_OP_34                  = 0x34U,
     VRPC_FN_MAP_BAR1_MEMORY        = 0x34U,
     VRPC_FN_OP_38                  = 0x38U,
@@ -198,6 +207,60 @@ enum {
 #define GP104_MAX_CHANNELS         128U
 #define GP104_MAX_RM_OBJECTS       128U
 #define GP104_MAX_GUEST_MAPS       32U
+#define GP104_MAX_MMIO_MAPS        64U
+#define GP104_MAX_MEM_RECS         128U
+#define GP104_MAX_DMA_MAPS         128U
+#define GP104_MAX_CHAN_RECS         128U
+
+typedef struct {
+    int      in_use;
+    uint32_t region_id;
+    uint64_t pmmio_page;
+    uint64_t vmmio_page;
+    uint64_t size;
+    int      refcnt;
+} gp104_mmio_map_t;
+
+typedef struct {
+    int       in_use;
+    uint32_t  guest_client;
+    uint32_t  h_device;
+    uint32_t  h_memory;
+    uint32_t  h_class;
+    uint64_t  size;
+    uint64_t  bar1_offset;
+    uint64_t  bar1_vmmio;
+    uint64_t  bar1_pmmio;
+    uint64_t  bar1_size;
+    void     *rm_cpu_addr;
+    int       bar1_mapped;
+    uint32_t  pinned_count;
+    uint64_t *pinned_gpfns;
+} gp104_mem_rec_t;
+
+typedef struct {
+    int      in_use;
+    uint32_t guest_client;
+    uint32_t h_device;
+    uint32_t h_dma;
+    uint32_t h_memory;
+    uint32_t flags;
+    uint64_t dma_offset;
+    uint64_t length;
+} gp104_dma_map_t;
+
+typedef struct {
+    int      in_use;
+    uint32_t guest_client;
+    uint32_t h_parent;
+    uint32_t h_channel;
+    uint32_t h_class;
+    uint32_t guest_chid;
+    uint32_t phys_chid;
+    uint64_t userd_vmmio;
+    uint64_t userd_pmmio;
+    int      userd_mapped;
+} gp104_chan_rec_t;
 
 typedef struct {
     uint32_t vgpu_type_id;
@@ -291,6 +354,20 @@ typedef struct {
     uint8_t  gr_static_info_buf[4096];
     uint32_t gr_static_info_len;
     uint64_t vrpc_rm_forwarded_calls;
+
+    /* Phase 1B Milestone 1B-2 MMU, Direct MMIO, Pinned PFN & Channel Tracking */
+    gp104_mmio_map_t mmio_maps[GP104_MAX_MMIO_MAPS];
+    gp104_mem_rec_t  mem_recs[GP104_MAX_MEM_RECS];
+    gp104_dma_map_t  dma_maps[GP104_MAX_DMA_MAPS];
+    gp104_chan_rec_t chan_recs[GP104_MAX_CHAN_RECS];
+    uint32_t active_channel_count;
+    uint64_t bar1_allocated_bytes;
+    uint64_t pte_fill_count;
+    uint64_t pde_update_count;
+    uint32_t gpu_pde_bound_count;
+    uint64_t pinned_pages_total;
+    uint64_t mmio_region_maps_total;
+    uint64_t mmio_region_unmaps_total;
 } gp104_vgpu_dev_t;
 
 /* Core clean-room GP104 engine entrypoints */
@@ -308,6 +385,15 @@ uint32_t gp104_bar0_access(void *priv, uint32_t is_write, uint32_t emul_space,
 uint32_t gp104_handle_vrpc_buffer(gp104_vgpu_dev_t *dev, uint8_t *buf, size_t buf_len);
 int      gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
                                 size_t buf_len, uint32_t tot, uint32_t *out_status);
+int      gp104_vrpc_mmu_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
+                                 size_t buf_len, uint32_t tot, uint32_t *out_status);
+int      gp104_is_reserved_plugin_handle(uint32_t dev_handle, uint32_t h);
+uint32_t gp104_resolve_host_client(gp104_vgpu_dev_t *dev, uint32_t guest_client, uint32_t *out_hc);
+uint32_t gp104_guest_region_map(gp104_vgpu_dev_t *dev, uint32_t region_id, uint64_t pmmio,
+                                uint64_t size, uint64_t vmmio, int add);
+void     gp104_mmu_on_free_obj(gp104_vgpu_dev_t *dev, uint32_t guest_client, uint32_t h_obj);
+void     gp104_mmu_on_free_client(gp104_vgpu_dev_t *dev, uint32_t guest_client);
+void     gp104_mmu_release_all(gp104_vgpu_dev_t *dev);
 void     gp104_build_static_info_blobs(gp104_vgpu_dev_t *dev);
 uint32_t open_vgpu_plugin_record_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp,
                                      uint32_t ho, uint32_t cls);

@@ -207,6 +207,101 @@ NV_STATUS open_vgpu_rm_dup_object(int ctl_fd, uint32_t h_client_dst, uint32_t h_
     return p.status;
 }
 
+NV_STATUS open_vgpu_rm_map_memory(int ctl_fd, int gpu_fd, uint32_t h_client, uint32_t h_device,
+                                  uint32_t h_memory, uint64_t offset, uint64_t length,
+                                  uint32_t flags, void **out_addr)
+{
+    if (ctl_fd < 0 || h_client == 0U || h_device == 0U || h_memory == 0U) {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    NVOS33_PARAMETERS p;
+    memset(&p, 0, sizeof(p));
+    p.hClient  = h_client;
+    p.hDevice  = h_device;
+    p.hMemory  = h_memory;
+    p.offset   = offset;
+    p.length   = length;
+    p.flags    = flags;
+    p.fd       = (gpu_fd >= 0) ? gpu_fd : ctl_fd;
+    if (open_vgpu_rm_ctl_ioctl(ctl_fd, NV_ESC_RM_MAP_MEMORY, sizeof(p),
+                               NV_IOCTL(NV_ESC_RM_MAP_MEMORY, sizeof(p)), &p) < 0) {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+    if (p.status == NV_OK && out_addr) {
+        *out_addr = (void *)(uintptr_t)p.pLinearAddress;
+    }
+    return p.status;
+}
+
+NV_STATUS open_vgpu_rm_unmap_memory(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                    uint32_t h_memory, void *linear_addr, uint32_t flags)
+{
+    if (ctl_fd < 0 || h_client == 0U || h_device == 0U || h_memory == 0U) {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    NVOS34_PARAMETERS p;
+    memset(&p, 0, sizeof(p));
+    p.hClient        = h_client;
+    p.hDevice        = h_device;
+    p.hMemory        = h_memory;
+    p.pLinearAddress = (NvP64)(uintptr_t)linear_addr;
+    p.flags          = flags;
+    if (open_vgpu_rm_ctl_ioctl(ctl_fd, NV_ESC_RM_UNMAP_MEMORY, sizeof(p),
+                               NV_IOCTL(NV_ESC_RM_UNMAP_MEMORY, sizeof(p)), &p) < 0) {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+    return p.status;
+}
+
+NV_STATUS open_vgpu_rm_map_memory_dma(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                      uint32_t h_dma, uint32_t h_memory, uint64_t offset,
+                                      uint64_t length, uint32_t flags, uint64_t *dma_offset_inout)
+{
+    if (ctl_fd < 0 || h_client == 0U || h_device == 0U || h_dma == 0U || h_memory == 0U) {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    NVOS46_PARAMETERS p;
+    memset(&p, 0, sizeof(p));
+    p.hClient   = h_client;
+    p.hDevice   = h_device;
+    p.hDma      = h_dma;
+    p.hMemory   = h_memory;
+    p.offset    = offset;
+    p.length    = length;
+    p.flags     = flags;
+    p.dmaOffset = dma_offset_inout ? *dma_offset_inout : 0ULL;
+    if (open_vgpu_rm_ctl_ioctl(ctl_fd, NV_ESC_RM_MAP_MEMORY_DMA, sizeof(p),
+                               NV_IOCTL(NV_ESC_RM_MAP_MEMORY_DMA, sizeof(p)), &p) < 0) {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+    if (p.status == NV_OK && dma_offset_inout) {
+        *dma_offset_inout = p.dmaOffset;
+    }
+    return p.status;
+}
+
+NV_STATUS open_vgpu_rm_unmap_memory_dma(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                        uint32_t h_dma, uint32_t h_memory, uint32_t flags,
+                                        uint64_t dma_offset)
+{
+    if (ctl_fd < 0 || h_client == 0U || h_device == 0U || h_dma == 0U || h_memory == 0U) {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    NVOS47_PARAMETERS p;
+    memset(&p, 0, sizeof(p));
+    p.hClient   = h_client;
+    p.hDevice   = h_device;
+    p.hDma      = h_dma;
+    p.hMemory   = h_memory;
+    p.flags     = flags;
+    p.dmaOffset = dma_offset;
+    if (open_vgpu_rm_ctl_ioctl(ctl_fd, NV_ESC_RM_UNMAP_MEMORY_DMA, sizeof(p),
+                               NV_IOCTL(NV_ESC_RM_UNMAP_MEMORY_DMA, sizeof(p)), &p) < 0) {
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+    return p.status;
+}
+
 static int parse_bdf_filter(const char *bdf, unsigned int *dom, unsigned int *bus,
                             unsigned int *slot, unsigned int *fn)
 {

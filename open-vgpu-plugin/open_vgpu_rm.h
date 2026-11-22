@@ -11,17 +11,47 @@ extern "C" {
 
 /* Additional 535.309.01 RM Escapes, Classes, Structs & Controls for Phase 1B */
 #ifndef NV_ESC_RM_IDLE_CHANNELS
-#define NV_ESC_RM_IDLE_CHANNELS 0x30U
+#define NV_ESC_RM_IDLE_CHANNELS     0x30U
 #endif
 #ifndef NV_ESC_RM_DUP_OBJECT
-#define NV_ESC_RM_DUP_OBJECT    0x34U
+#define NV_ESC_RM_DUP_OBJECT        0x34U
+#endif
+#ifndef NV_ESC_RM_MAP_MEMORY_DMA
+#define NV_ESC_RM_MAP_MEMORY_DMA    0x57U
+#endif
+#ifndef NV_ESC_RM_UNMAP_MEMORY_DMA
+#define NV_ESC_RM_UNMAP_MEMORY_DMA  0x58U
 #endif
 
 #ifndef NV01_ROOT
-#define NV01_ROOT               0x00000000U
+#define NV01_ROOT                   0x00000000U
+#endif
+#ifndef NV01_CONTEXT_DMA
+#define NV01_CONTEXT_DMA            0x00000002U
+#endif
+#ifndef NV01_MEMORY_LOCAL_USER
+#define NV01_MEMORY_LOCAL_USER      0x00000040U
+#endif
+#ifndef NV01_MEMORY_LIST_FBMEM
+#define NV01_MEMORY_LIST_FBMEM      0x00000083U
+#endif
+#ifndef NV01_MEMORY_HW_RESOURCES
+#define NV01_MEMORY_HW_RESOURCES    0x000000b1U
+#endif
+#ifndef NV50_MEMORY_VIRTUAL
+#define NV50_MEMORY_VIRTUAL         0x000050a0U
+#endif
+#ifndef NV50_DEFERRED_API_CLASS
+#define NV50_DEFERRED_API_CLASS     0x00005080U
+#endif
+#ifndef FERMI_VASPACE_A
+#define FERMI_VASPACE_A             0x000090f1U
+#endif
+#ifndef KEPLER_CHANNEL_GROUP_A
+#define KEPLER_CHANNEL_GROUP_A      0x0000a06cU
 #endif
 #ifndef NVA082_HOST_VGPU_DEVICE
-#define NVA082_HOST_VGPU_DEVICE 0x0000a082U
+#define NVA082_HOST_VGPU_DEVICE     0x0000a082U
 #endif
 
 /* Control Commands verified from libnvidia-vgpu.so.535.309.01 REA decompilation */
@@ -30,8 +60,14 @@ extern "C" {
 #define NV0000_CTRL_CMD_CLIENT_SET_META_0901       0x00000901U
 #define NV0000_CTRL_CMD_CLIENT_DISABLE_USERD_ISOL  0x00000902U
 
+#define NV0041_CTRL_CMD_GET_SURFACE_PHYS_ATTR      0x00410114U
+
 #define NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE 0x00800289U
 #define NV0080_CTRL_CMD_DMA_0x170F                 0x0080170fU
+#define NV0080_CTRL_CMD_DMA_FILL_PTE_MEM           0x00801802U
+#define NV0080_CTRL_CMD_DMA_SET_PAGE_DIRECTORY     0x00801808U
+#define NV0080_CTRL_CMD_DMA_UPDATE_PDE_2           0x00801809U
+#define NV0080_CTRL_CMD_DMA_UNSET_PAGE_DIRECTORY   0x0080180aU
 #define NV0080_CTRL_CMD_FB_0x1812                  0x00801812U
 
 #define NV2080_CTRL_CMD_GPU_GET_INFO_V2            0x20800102U
@@ -45,6 +81,7 @@ extern "C" {
 #define NV2080_CTRL_CMD_PERF_0x3002                0x20803002U
 #define NV2080_CTRL_CMD_GR_CTXSW_ZCULL             0x20809004U
 
+#define NV5080_CTRL_CMD_DEFERRED_API_V2            0x50800103U
 #define NV83DE_CTRL_CMD_DEBUG_0x0309               0x83de0309U
 #define NV9096_CTRL_CMD_SET_ZBC_0x0107             0x90960107U
 #define NVA06C_CTRL_CMD_GPFIFO_SCHEDULE            0xa06c0101U
@@ -59,6 +96,74 @@ extern "C" {
 #define NVA082_CTRL_CMD_GET_ENCODER_CAPACITY       0xa082010dU
 #define NVA082_CTRL_CMD_SET_FB_USAGE               0xa0820110U
 #define NVA082_CTRL_CMD_GET_P2P_CAP                0xa082012cU
+
+typedef struct {
+    NvU32 hClient;
+    NvU32 hDevice;
+    NvU32 hDma;
+    NvU32 hMemory;
+    NvU64 offset;
+    NvU64 length;
+    NvU32 flags;
+    NvU32 pad0;
+    NvU64 dmaOffset;
+    NvU32 status;
+    NvU32 pad1;
+} NVOS46_PARAMETERS;
+
+_Static_assert(sizeof(NVOS46_PARAMETERS) == 0x38U, "NVOS46_PARAMETERS must be 56 bytes");
+
+typedef struct {
+    NvU32 hClient;
+    NvU32 hDevice;
+    NvU32 hDma;
+    NvU32 hMemory;
+    NvU32 flags;
+    NvU32 pad0;
+    NvU64 dmaOffset;
+    NvU32 status;
+    NvU32 pad1;
+} NVOS47_PARAMETERS;
+
+_Static_assert(sizeof(NVOS47_PARAMETERS) == 0x28U, "NVOS47_PARAMETERS must be 40 bytes");
+
+typedef struct {
+    NvU32 hSubDevice;
+    NvU32 flags;
+    NvU32 hMemory;
+    NvU32 pad0;
+    NvU64 offset;
+    NvU64 limit;
+} NV_CONTEXT_DMA_ALLOCATION_PARAMS;
+
+_Static_assert(sizeof(NV_CONTEXT_DMA_ALLOCATION_PARAMS) == 0x20U,
+               "NV_CONTEXT_DMA_ALLOCATION_PARAMS must be 32 bytes");
+
+typedef struct {
+    NvU32 hClient;
+    NvU32 hParent;
+    NvU32 hObject;
+    NvU32 hSubDevice;
+    NvU32 pad10[2];
+    NvU32 pageOffset;
+    NvU32 pad1c[7];
+    NvU32 attr;
+    NvU32 pad3c[2];
+    NvU32 pageCount;
+    NvU32 pad48[2];
+    NvU8  guestId[16];
+    NvU32 pad60[2];
+    NvU32 format;
+    NvU32 comprCovg;
+    NvU32 pad70[4];
+    NvP64 pPageNumberList;
+    NvU64 limit;
+    NvU32 flagsOs02;
+    NvU32 pad94;
+} NV_MEMORY_LIST_ALLOCATION_PARAMS;
+
+_Static_assert(sizeof(NV_MEMORY_LIST_ALLOCATION_PARAMS) == 0x98U,
+               "NV_MEMORY_LIST_ALLOCATION_PARAMS must be 152 bytes");
 
 typedef struct {
     NvU32 hClient;
@@ -153,6 +258,17 @@ NV_STATUS open_vgpu_rm_free(int ctl_fd, uint32_t h_root, uint32_t h_parent, uint
 NV_STATUS open_vgpu_rm_dup_object(int ctl_fd, uint32_t h_client_dst, uint32_t h_parent,
                                   uint32_t h_obj_dst, uint32_t h_client_src, uint32_t h_obj_src,
                                   uint32_t flags);
+NV_STATUS open_vgpu_rm_map_memory(int ctl_fd, int gpu_fd, uint32_t h_client, uint32_t h_device,
+                                  uint32_t h_memory, uint64_t offset, uint64_t length,
+                                  uint32_t flags, void **out_addr);
+NV_STATUS open_vgpu_rm_unmap_memory(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                    uint32_t h_memory, void *linear_addr, uint32_t flags);
+NV_STATUS open_vgpu_rm_map_memory_dma(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                      uint32_t h_dma, uint32_t h_memory, uint64_t offset,
+                                      uint64_t length, uint32_t flags, uint64_t *dma_offset_inout);
+NV_STATUS open_vgpu_rm_unmap_memory_dma(int ctl_fd, uint32_t h_client, uint32_t h_device,
+                                        uint32_t h_dma, uint32_t h_memory, uint32_t flags,
+                                        uint64_t dma_offset);
 
 NV_STATUS open_vgpu_rm_attach(open_vgpu_rm_ctx_t *rm, uint32_t dev_handle, uint32_t vgpu_type_id,
                               const char *bdf, const uint8_t uuid[16], uint32_t vm_pid);

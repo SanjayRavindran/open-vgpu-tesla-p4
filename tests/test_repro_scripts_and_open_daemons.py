@@ -80,6 +80,7 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-vgpu-plugin" / "gp104_vgpu_core.c",
             ROOT / "open-vgpu-plugin" / "open_vgpu_rm.c",
             ROOT / "open-vgpu-plugin" / "open_vrpc_rm.c",
+            ROOT / "open-vgpu-plugin" / "open_vrpc_mmu.c",
             ROOT / "open-vgpu-plugin" / "open_vgpu_plugin.c",
             ROOT / "open-vgpu-plugin" / "mock_vendor_vgpu.c",
             ROOT / "open-vgpu-plugin" / "test_vgpu_plugin_unit.c",

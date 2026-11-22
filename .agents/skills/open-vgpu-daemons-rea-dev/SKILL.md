@@ -18,7 +18,7 @@ description: >-
   3. `open-nvidia-xid-logd` (`open-xid-logd/open_xid_logd.c`) -> daemonize/foreground + PID locking + `dlopen("libnvidia-ml.so.1")`, clean non-GSP Pascal exit `0`, Base64 76-char XID debugdump syslog reporter on GSP GPUs.
   4. `open-nvidia-vgpu-mgr` (`open-vgpu-mgr/open_vgpu_mgr.c`, `vmiop_env.c`, `rm_client.c`) -> KVM/VFIO `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d` master/worker runtime daemon, `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), zero-overhead `OPEN_VGPU_PLUGIN_LIB` + `OPEN_VGPU_TRACE_DIR` (`msync` + `memcpy`, **never `/proc/self/mem`** on vGPU mmap pages), and all `60` dynamic `vmiop*` exports + `vmiop_presentation`.
   5. `open-nvidia-smi` & `libopen-nvidia-ml.so` (`open-nvml-smi/open_nvml.c`, `open_nvidia_smi.c`) -> clean-room NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and vGPU instances.
-  6. `libopen-nvidia-vgpu.so` (`open-vgpu-plugin/open_vgpu_plugin.c`, `gp104_vgpu_core.c`) -> Phase 1A `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) + `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B) standalone GP104 core & hybrid trace interposer alongside `libnvidia-vgpu.so.535.309.01`.
+  6. `libopen-nvidia-vgpu.so` (`open-vgpu-plugin/open_vgpu_plugin.c`, `gp104_vgpu_core.c`, `open_vgpu_rm.c`, `open_vrpc_rm.c`, `open_vrpc_mmu.c`) -> `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) + `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B) standalone GP104 core, host RM `NVA081`/`NVA082` bridge, all `47/47` cataloged live VRPC opcodes (with PFN pinning & BAR1/USERD MMIO aperture forwarding), plus hybrid trace interposer alongside `libnvidia-vgpu.so.535.309.01`.
   7. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
 - **Retained Stable Components**: `nvidia.ko` (`nv-kernel.o_binary`) and `libnvidia-vgpu.so.535.309.01` (used behind `libopen-nvidia-vgpu.so` in hybrid mode for live 2-VM VRPC/DRM parity).
 
@@ -53,7 +53,7 @@ make -C open-vgpu-mgr clean all test
 # C open-nvidia-smi + libopen-nvidia-ml.so mock-RM unit tests
 make -C open-nvml-smi clean all test
 
-# C libopen-nvidia-vgpu.so standalone GP104 + hybrid trace-interposer unit tests
+# C libopen-nvidia-vgpu.so standalone GP104 + 47/47 VRPCs + hybrid trace-interposer unit tests (4 suites)
 make -C open-vgpu-plugin clean all test
 
 # Clean build binaries before git commit (CI rejects tracked .so/ELF files)

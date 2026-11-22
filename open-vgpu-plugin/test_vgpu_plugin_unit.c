@@ -27,6 +27,16 @@ static uint8_t  g_guest_pages[4][0x1000];
 static uint64_t g_guest_gpas[4] = { 0x100000ULL, 0x101000ULL, 0x102000ULL, 0x103000ULL };
 static uint32_t g_msi_count = 0U;
 static uint32_t g_last_mig_size_calls = 0U;
+static uint32_t g_pin_calls = 0U;
+static uint64_t g_pinned_pages = 0ULL;
+static uint32_t g_unpin_calls = 0U;
+static uint64_t g_unpinned_pages = 0ULL;
+static uint32_t g_region_map_adds = 0U;
+static uint32_t g_region_map_removes = 0U;
+static uint32_t g_last_map_region_id = 0U;
+static uint64_t g_last_map_vmmio = 0ULL;
+static uint64_t g_last_map_pmmio = 0ULL;
+static uint64_t g_last_map_size = 0ULL;
 
 uint32_t vmiop_log(uint32_t level, const char *fmt, ...)
 {
@@ -105,6 +115,47 @@ uint32_t vmiop_unmap_guest_memory(uint32_t mem_id)
     return VMIOP_SUCCESS;
 }
 
+uint32_t vmiop_get_guest_id(uint64_t out_uuid[2])
+{
+    if (!out_uuid) return VMIOP_ERROR_INVAL;
+    out_uuid[0] = 0x1111111122222222ULL;
+    out_uuid[1] = 0x3333333344444444ULL;
+    return VMIOP_SUCCESS;
+}
+
+uint32_t vmiop_pin_guest_pages_v2(uint32_t dev_handle, const uint64_t *gpfn,
+                                  uint64_t *hpfn, uint32_t count)
+{
+    (void)dev_handle;
+    if (!gpfn || !hpfn) return VMIOP_ERROR_INVAL;
+    for (uint32_t i = 0; i < count; i++) {
+        hpfn[i] = gpfn[i] + 0x100000ULL;
+    }
+    g_pin_calls++;
+    g_pinned_pages += count;
+    return VMIOP_SUCCESS;
+}
+
+uint32_t vmiop_map_guest_region(uint32_t region_id, uint64_t pmmio_start,
+                                uint64_t reserved, uint64_t size,
+                                uint64_t vmmio_start, int add)
+{
+    (void)reserved;
+    if (region_id == 0U || size == 0ULL) return VMIOP_ERROR_INVAL;
+    g_last_map_region_id = region_id;
+    g_last_map_pmmio     = pmmio_start;
+    g_last_map_vmmio     = vmmio_start;
+    g_last_map_size      = size;
+    if (add == 1) {
+        g_region_map_adds++;
+    } else if (add == 0) {
+        g_region_map_removes++;
+    } else {
+        return VMIOP_ERROR_INVAL;
+    }
+    return VMIOP_SUCCESS;
+}
+
 static uint32_t host_inject_msi(uint64_t h, uint64_t a, uint32_t b)
 {
     (void)h; (void)a; (void)b;
@@ -114,7 +165,9 @@ static uint32_t host_inject_msi(uint64_t h, uint64_t a, uint32_t b)
 static uint32_t host_update_lfb(void) { return VMIOP_SUCCESS; }
 static uint32_t host_unpin_pages(uint64_t h, uint64_t *p, uint64_t u, uint32_t c)
 {
-    (void)h; (void)p; (void)u; (void)c;
+    (void)h; (void)p; (void)u;
+    g_unpin_calls++;
+    g_unpinned_pages += c;
     return VMIOP_SUCCESS;
 }
 static uint32_t host_guest_id_type(void) { return 1U; }
@@ -259,12 +312,16 @@ static void test_standalone_gp104_end_to_end(void)
     assert(r32(msg, 0x20) == 0xec000000U);
 
     /* 4) Live-observed top VRPC opcodes (0x1b, 0x38, 0x40, 0x50, 0x9c) -> 0x00 */
-    static const uint32_t live_ops[] = {
-        VRPC_FN_OP_1B, VRPC_FN_OP_38, VRPC_FN_SET_GUEST_BRANCH_VER,
-        VRPC_FN_BATCH_50, VRPC_FN_SYNC_9C
+    static const struct { uint32_t fn; uint32_t tot; } live_ops[] = {
+        { VRPC_FN_FILL_PTE_MEM,         136U },
+        { VRPC_FN_UPDATE_PDE_2,         96U  },
+        { VRPC_FN_SET_GUEST_BRANCH_VER, 296U },
+        { VRPC_FN_BATCH_50,             64U  },
+        { VRPC_FN_SYNC_9C,              64U  },
     };
     for (size_t i = 0; i < sizeof(live_ops) / sizeof(live_ops[0]); i++) {
-        w32(msg, 0x0c, live_ops[i]);
+        w32(msg, 0x08, live_ops[i].tot);
+        w32(msg, 0x0c, live_ops[i].fn);
         w32(msg, 0x10, OPEN_VRPC_PENDING);
         assert(bar0_cb(bar0_priv, 1U, VGPU_EMUL_MMIO, 0x8f050ULL, 4U, &bell, &dummy) == 0U);
         assert(r32(msg, 0x10) == 0U);
@@ -360,6 +417,17 @@ static struct {
     uint32_t ctrl_calls;
     uint32_t free_calls;
     uint32_t dup_calls;
+    uint32_t map_mem_calls;
+    uint32_t unmap_mem_calls;
+    uint32_t map_dma_calls;
+    uint32_t unmap_dma_calls;
+    uint32_t alloc_list_sys_calls;
+    uint32_t alloc_ctx_dma_calls;
+    uint32_t alloc_chan_calls;
+    uint32_t alloc_vidmem_calls;
+    uint32_t alloc_hwres_calls;
+    uint32_t alloc_virtmem_calls;
+    uint32_t alloc_obj_calls;
 } g_mock_rm;
 
 static int mock_rm_open(const char *path, int flags)
@@ -425,13 +493,30 @@ static int mock_rm_ioctl(int fd, unsigned long req, void *arg)
             return 0;
         }
         NVOS64_PARAMETERS *p = (NVOS64_PARAMETERS *)arg;
-        if (p->hClass == NVA081_VGPU_CONFIG) g_mock_rm.saw_nva081++;
-        if (p->hClass == NVA082_HOST_VGPU_DEVICE) {
+        if (p->hClass == NVA081_VGPU_CONFIG) {
+            g_mock_rm.saw_nva081++;
+        } else if (p->hClass == NVA082_HOST_VGPU_DEVICE) {
             assert(p->paramsSize == 0x70U);
             NVA082_ALLOC_PARAMETERS *ap = (NVA082_ALLOC_PARAMETERS *)(uintptr_t)p->pAllocParms;
             assert(ap->vgpuType == 65U);
             assert(ap->vmIdType == 1U);
             g_mock_rm.saw_nva082++;
+        } else if (p->hClass == NV01_DEVICE_0 || p->hClass == NV20_SUBDEVICE_0) {
+            /* device / subdevice tracked separately */
+        } else if (p->hClass == NV01_MEMORY_LIST_SYSTEM) {
+            g_mock_rm.alloc_list_sys_calls++;
+        } else if (p->hClass == NV01_CONTEXT_DMA) {
+            g_mock_rm.alloc_ctx_dma_calls++;
+        } else if (p->hClass == 0xc06fU || p->hClass == 0xa06fU || p->hClass == 0x906fU) {
+            g_mock_rm.alloc_chan_calls++;
+        } else if (p->hClass == NV01_MEMORY_LIST_FBMEM) {
+            g_mock_rm.alloc_vidmem_calls++;
+        } else if (p->hClass == NV01_MEMORY_HW_RESOURCES) {
+            g_mock_rm.alloc_hwres_calls++;
+        } else if (p->hClass == NV50_MEMORY_VIRTUAL) {
+            g_mock_rm.alloc_virtmem_calls++;
+        } else {
+            g_mock_rm.alloc_obj_calls++;
         }
         p->status = NV_OK;
         return 0;
@@ -445,6 +530,34 @@ static int mock_rm_ioctl(int fd, unsigned long req, void *arg)
     if (nr == NV_ESC_RM_DUP_OBJECT) {
         NVOS55_DUP_PARAMETERS *p = (NVOS55_DUP_PARAMETERS *)arg;
         g_mock_rm.dup_calls++;
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_MAP_MEMORY) {
+        NVOS33_PARAMETERS *p = (NVOS33_PARAMETERS *)arg;
+        g_mock_rm.map_mem_calls++;
+        p->pLinearAddress = 0x7f001000ULL;
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_UNMAP_MEMORY) {
+        NVOS34_PARAMETERS *p = (NVOS34_PARAMETERS *)arg;
+        g_mock_rm.unmap_mem_calls++;
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_MAP_MEMORY_DMA) {
+        NVOS46_PARAMETERS *p = (NVOS46_PARAMETERS *)arg;
+        g_mock_rm.map_dma_calls++;
+        if (p->dmaOffset == 0ULL) {
+            p->dmaOffset = 0x200000000ULL;
+        }
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_UNMAP_MEMORY_DMA) {
+        NVOS47_PARAMETERS *p = (NVOS47_PARAMETERS *)arg;
+        g_mock_rm.unmap_dma_calls++;
         p->status = NV_OK;
         return 0;
     }
@@ -478,6 +591,9 @@ static int mock_rm_ioctl(int fd, unsigned long req, void *arg)
             g_mock_rm.last_lic_state = *(const uint8_t *)prm;
         } else if (p->cmd == NVA082_CTRL_CMD_SET_FB_USAGE) {
             g_mock_rm.last_fb_usage = *(const uint64_t *)prm;
+        } else if (p->cmd == NV0041_CTRL_CMD_GET_SURFACE_PHYS_ATTR) {
+            uint64_t pmmio = 0xfe0010000ULL;
+            memcpy((uint8_t *)prm + 0x08, &pmmio, sizeof(pmmio));
         }
         p->status = NV_OK;
         return 0;
@@ -673,6 +789,330 @@ static void test_rm_backed_vrpc_and_nva082_lifecycle(void)
     printf("  [PASS] test_rm_backed_vrpc_and_nva082_lifecycle\n");
 }
 
+static void w64(uint8_t *p, size_t off, uint64_t v)
+{
+    memcpy(p + off, &v, 8U);
+}
+
+static uint64_t r64(const uint8_t *p, size_t off)
+{
+    uint64_t v = 0ULL;
+    memcpy(&v, p + off, 8U);
+    return v;
+}
+
+static void test_mmu_channels_pfn_pin_and_bar1_apertures(void)
+{
+    memset(&g_mock_rm, 0, sizeof(g_mock_rm));
+    g_mock_rm.next_host_client = 0xc1d02000U;
+    g_pin_calls          = 0U;
+    g_pinned_pages       = 0ULL;
+    g_unpin_calls        = 0U;
+    g_unpinned_pages     = 0ULL;
+    g_region_map_adds    = 0U;
+    g_region_map_removes = 0U;
+    g_last_map_region_id = 0U;
+    g_last_map_vmmio     = 0ULL;
+    g_last_map_pmmio     = 0ULL;
+    g_last_map_size      = 0ULL;
+
+    open_vgpu_rm_sys_ops_t ops = {
+        .open_fn = mock_rm_open, .close_fn = mock_rm_close, .ioctl_fn = mock_rm_ioctl
+    };
+    open_vgpu_rm_set_sys_ops(&ops);
+
+    static gp104_vgpu_dev_t dev;
+    gp104_dev_init_defaults(&dev, 1U, 65U);
+    snprintf(dev.gpu_pci_bdf, sizeof(dev.gpu_pci_bdf), "0000:01:00.0");
+
+    vmiop_env_v2_t env;
+    bind_env(&env);
+    assert(gp104_dev_start(&dev, &env) == VMIOP_SUCCESS);
+
+    /* Simulate PCI relocation & non-zero instance byte (inst=1) in VMIOP region IDs */
+    dev.bar0_gpa       = 0x81000000ULL;
+    dev.bar1_gpa       = 0x800000000ULL;
+    dev.bar0_region_id = 0x01000001U;
+    dev.bar1_region_id = 0x01000002U;
+
+    static uint8_t vbuf[8192];
+    uint32_t g_client = 0xc1d00010U, g_dev = 0xaa100001U, g_sub = 0xaa100002U;
+
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_SYSTEM_INFO, 824U);
+    w32(vbuf, 0x20, 0x23U);
+    w32(vbuf, 0x24, 0x05U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_ALLOC_ROOT, 140U);
+    w32(vbuf, 0x20, g_client);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_FB_INFO, 96U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, NV01_DEVICE_0);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_SET_OBJECT, 72U);
+    w32(vbuf, 0x28, g_client);
+    w32(vbuf, 0x2c, g_dev);
+    w32(vbuf, 0x30, g_sub);
+    w32(vbuf, 0x34, NV20_SUBDEVICE_0);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    /* 1) 0x04 ALLOC_MEMORY: page/length bounds check + PFN pinning + 0x81 alloc */
+    uint32_t h_sys_mem = 0xbb100001U;
+    init_vrpc(vbuf, VRPC_FN_ALLOC_MEMORY_535, 120U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_sys_mem);
+    w32(vbuf, 0x34, 0x100U);          /* pageOffset */
+    w64(vbuf, 0x40, 0x4000ULL);       /* length */
+    w32(vbuf, 0x48, 2U);              /* too few pages: 2 * 4096 < 0x4100 */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+
+    init_vrpc(vbuf, VRPC_FN_ALLOC_MEMORY_535, 0x58U + 5U * 8U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_sys_mem);
+    w32(vbuf, 0x34, 0x100U);
+    w64(vbuf, 0x40, 0x4000ULL);
+    w32(vbuf, 0x48, 5U);
+    for (uint32_t i = 0; i < 5U; i++) {
+        w64(vbuf, 0x58U + i * 8U, 0x200ULL + i);
+    }
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_pin_calls == 1U && g_pinned_pages == 5ULL);
+    assert(g_mock_rm.alloc_list_sys_calls == 1U);
+
+    /* 2) 0x05 ALLOC_CTX_DMA */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_CTX_DMA_535, 88U);
+    w32(vbuf, 0x24, g_client);
+    w32(vbuf, 0x28, 0x01ff0005U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == 0xff100007U);
+
+    w32(vbuf, 0x28, 0xdd100001U);
+    w32(vbuf, 0x2c, NV01_CONTEXT_DMA);
+    w32(vbuf, 0x38, h_sys_mem);
+    w64(vbuf, 0x48, 0x3fffULL);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_ctx_dma_calls == 1U);
+
+    /* 3) 0x06 ALLOC_CHANNEL_DMA + USERD direct MMIO map + unlicensed channel limit */
+    uint32_t h_chan = 0xcc100001U;
+    init_vrpc(vbuf, VRPC_FN_ALLOC_CHANNEL_DMA_535, 280U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_chan);
+    w32(vbuf, 0x2c, 0xdeadU); /* bad class */
+    w32(vbuf, 0x48, 64U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == 0x22U);
+
+    w32(vbuf, 0x2c, 0xc06fU);
+    w32(vbuf, 0x48, 3U); /* non-power-of-2 */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+
+    w32(vbuf, 0x48, 64U);
+    w64(vbuf, 0xe0, 0x81fe00000ULL); /* userd vmmio */
+    w64(vbuf, 0xe8, 0xfefdf2000ULL); /* userd pmmio */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_chan_calls == 1U);
+    assert(g_region_map_adds == 1U && g_last_map_region_id == 0x01000001U);
+    assert(g_last_map_vmmio == 0x81fe00000ULL && g_last_map_pmmio == 0xfefdf2000ULL);
+    assert(g_last_map_size == 0x1000ULL && dev.active_channel_count == 1U);
+
+    dev.license_state = 4U;
+    uint32_t saved_cnt = dev.active_channel_count;
+    dev.active_channel_count = 0x55U;
+    w32(vbuf, 0x28, 0xcc100056U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_NO_MEMORY);
+    dev.active_channel_count = saved_cnt;
+    dev.license_state = 1U;
+
+    init_vrpc(vbuf, VRPC_FN_FREE_535, 48U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_chan);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_region_map_removes == 1U && dev.active_channel_count == 0U);
+
+    /* 4) 0x07 MAP_MEMORY BAR1 aperture forwarding & ref-counted deduplication */
+    uint32_t h_bar1_mem = 0xbb100002U;
+    init_vrpc(vbuf, VRPC_FN_MAP_MEMORY_535, 88U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_bar1_mem);
+    w64(vbuf, 0x38, 512ULL * 1024ULL * 1024ULL); /* > 256 MiB BAR1 */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_NO_MEMORY);
+
+    w64(vbuf, 0x38, 0x10000ULL);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.map_mem_calls == 1U);
+    assert(g_mock_rm.last_ctrl_cmd == NV0041_CTRL_CMD_GET_SURFACE_PHYS_ATTR);
+    assert(g_region_map_adds == 2U && g_last_map_region_id == 0x01000002U);
+    assert(g_last_map_pmmio == 0xfe0010000ULL && g_last_map_vmmio == 0x800000000ULL);
+    assert(g_last_map_size == 0x10000ULL && r64(vbuf, 0x40) == 0ULL);
+
+    assert(gp104_guest_region_map(&dev, dev.bar1_region_id, 0xfe0010000ULL,
+                                  0x10000ULL, 0x800000000ULL, 1) == VMIOP_SUCCESS);
+    assert(g_region_map_adds == 2U); /* deduplicated */
+    assert(gp104_guest_region_map(&dev, dev.bar1_region_id, 0xfe0010000ULL,
+                                  0x10000ULL, 0x800000000ULL, 0) == VMIOP_SUCCESS);
+    assert(g_region_map_removes == 1U); /* still refcnt=1 */
+
+    init_vrpc(vbuf, VRPC_FN_FREE_535, 48U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_bar1_mem);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_region_map_removes == 2U && g_mock_rm.unmap_mem_calls == 1U);
+    assert(dev.bar1_allocated_bytes == 0ULL);
+
+    /* 5) 0x09 ALLOC_OBJECT */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_OBJECT_535, 112U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xee100001U);
+    w32(vbuf, 0x2c, 0xc076U); /* unsupported vGPU class */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_NOT_SUPPORTED);
+
+    w32(vbuf, 0x2c, 0xc197U);
+    w32(vbuf, 0x30, 1024U); /* oversized params */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == 0xff100002U);
+
+    w32(vbuf, 0x30, 0U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    w32(vbuf, 0x28, 0xee100002U);
+    w32(vbuf, 0x2c, KEPLER_CHANNEL_GROUP_A);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_obj_calls == 2U);
+
+    /* 6) 0x0c ALLOC_VIDMEM + guest FB PFN range check */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_VIDMEM_535, 128U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xbb10000cU);
+    w32(vbuf, 0x2c, NV01_MEMORY_LIST_FBMEM);
+    w32(vbuf, 0x34, 0x02000000U); /* invalid attr bit combination */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+
+    w32(vbuf, 0x34, 0U);
+    w64(vbuf, 0x40, 0x10000ULL);
+    w64(vbuf, 0x78, 0xfffffULL); /* out of 3776 MiB guest FB range */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INSUFFICIENT_RESOURCES);
+
+    w64(vbuf, 0x78, 0x100ULL); /* valid guest FB PFN */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_vidmem_calls == 1U);
+
+    /* 7) 0x0e MAP_MEMORY_DMA & 0x0f UNMAP_MEMORY_DMA & unpin on 0x04 memory free */
+    init_vrpc(vbuf, VRPC_FN_MAP_MEMORY_DMA, 88U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xdd100001U);
+    w32(vbuf, 0x2c, h_sys_mem);
+    w64(vbuf, 0x38, 0x4000ULL);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.map_dma_calls == 1U && r64(vbuf, 0x48) == 0x200000000ULL);
+
+    init_vrpc(vbuf, VRPC_FN_UNMAP_MEMORY_DMA, 72U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xdd100001U);
+    w32(vbuf, 0x2c, h_sys_mem);
+    w64(vbuf, 0x38, 0x200000000ULL);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.unmap_dma_calls == 1U);
+
+    init_vrpc(vbuf, VRPC_FN_FREE_535, 48U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, h_sys_mem);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_unpin_calls == 1U && g_unpinned_pages == 5ULL);
+
+    /* 8) 0x1b FILL_PTE_MEM */
+    init_vrpc(vbuf, VRPC_FN_FILL_PTE_MEM, 136U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x40, 4U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV0080_CTRL_CMD_DMA_FILL_PTE_MEM);
+    assert(dev.pte_fill_count == 1ULL);
+
+    /* 9) 0x1c ALLOC_HWRES */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_HWRES, 152U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0x01ff001cU);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == 0xff100007U);
+    w32(vbuf, 0x28, 0xbb10001cU);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_hwres_calls == 1U);
+
+    /* 10) 0x21 DEFERRED_API_CONTROL */
+    init_vrpc(vbuf, VRPC_FN_DEFERRED_API_535, 128U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_sub);
+    w32(vbuf, 0x28, 0xdeadbeefU);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_NOT_SUPPORTED);
+    w32(vbuf, 0x28, 0x2080012bU);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV5080_CTRL_CMD_DEFERRED_API_V2);
+
+    /* 11) 0x2b MAP_SEMA_MEM */
+    init_vrpc(vbuf, VRPC_FN_MAP_SEMA_MEM_535, 56U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xbb10002bU);
+    w32(vbuf, 0x2c, g_sub);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.map_dma_calls == 2U && r64(vbuf, 0x30) == 0x200000000ULL);
+
+    /* 12) 0x34 ALLOC_VIRTUAL_MEMORY */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_VIRTMEM_535, 128U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x2c, 0xbb100034U);
+    w32(vbuf, 0x34, 0U); /* missing 0x80000 virtual flag */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+    w32(vbuf, 0x34, 0x00080000U);
+    w64(vbuf, 0x50, 0x100000ULL);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.alloc_virtmem_calls == 1U);
+
+    /* 13) 0x38 UPDATE_PDE_2 */
+    init_vrpc(vbuf, VRPC_FN_UPDATE_PDE_2, 96U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV0080_CTRL_CMD_DMA_UPDATE_PDE_2);
+    assert(dev.pde_update_count == 1ULL);
+
+    /* 14) 0x3d UPDATE_GPU_PDES */
+    init_vrpc(vbuf, VRPC_FN_UPDATE_GPU_PDES, 80U);
+    w64(vbuf, 0x20, 0x400000000ULL);
+    w32(vbuf, 0x28, 1U); /* isValid = 1 */
+    w32(vbuf, 0x38, g_client);
+    w32(vbuf, 0x3c, g_dev);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV0080_CTRL_CMD_DMA_SET_PAGE_DIRECTORY);
+    assert(dev.gpu_pde_bound_count == 1U);
+
+    w32(vbuf, 0x28, 0U); /* isValid = 0 */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV0080_CTRL_CMD_DMA_UNSET_PAGE_DIRECTORY);
+    assert(dev.gpu_pde_bound_count == 0U);
+
+    gp104_dev_shutdown(&dev);
+    open_vgpu_rm_reset_sys_ops();
+    assert(g_mock_rm.open_fds == 0);
+    assert(g_region_map_adds == g_region_map_removes);
+    assert(g_pinned_pages == g_unpinned_pages);
+    assert(g_mock_rm.unmap_dma_calls == 2U);
+    printf("  [PASS] test_mmu_channels_pfn_pin_and_bar1_apertures\n");
+}
+
 static int run_live_rm_probe(void)
 {
     open_vgpu_rm_reset_sys_ops();
@@ -716,6 +1156,7 @@ int main(int argc, char **argv)
     test_standalone_gp104_end_to_end();
     test_hybrid_interposer_and_trace();
     test_rm_backed_vrpc_and_nva082_lifecycle();
+    test_mmu_channels_pfn_pin_and_bar1_apertures();
     printf("ALL open-nvidia-vgpu PLUGIN UNIT TESTS PASSED!\n");
     return 0;
 }

@@ -28,10 +28,26 @@ static void w64(uint8_t *p, size_t off, uint64_t v)
     memcpy(p + off, &v, 8U);
 }
 
-static int is_reserved_plugin_handle(uint32_t dev_handle, uint32_t h)
+int gp104_is_reserved_plugin_handle(uint32_t dev_handle, uint32_t h)
 {
     uint32_t base = (dev_handle ? dev_handle : 1U) << 24;
     return h >= (base | 0xff0000U) && h <= (base | 0xffffffU);
+}
+
+uint32_t gp104_resolve_host_client(gp104_vgpu_dev_t *dev, uint32_t guest_client, uint32_t *out_hc)
+{
+    if (!dev || !out_hc) {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+    if (!dev->rm.attached || dev->rm.ctl_fd < 0) {
+        *out_hc = guest_client;
+        return NV_OK;
+    }
+    if (open_vgpu_rm_lookup_guest_client(&dev->rm, guest_client, out_hc)) {
+        return NV_OK;
+    }
+    int created = 0;
+    return open_vgpu_rm_lookup_or_create_guest_client(&dev->rm, guest_client, out_hc, &created);
 }
 
 void gp104_build_static_info_blobs(gp104_vgpu_dev_t *dev)
@@ -284,7 +300,7 @@ static uint32_t handle_vrpc_alloc_root(gp104_vgpu_dev_t *dev, const uint8_t *pay
                                        uint32_t payload_len)
 {
     uint32_t gc = (payload_len >= 4U) ? r32(payload, 0U) : 0xc1d00001U;
-    if (is_reserved_plugin_handle(dev->dev_handle, gc)) {
+    if (gp104_is_reserved_plugin_handle(dev->dev_handle, gc)) {
         return 0xff100007U; /* clash with plugin's reserved handle range */
     }
     uint32_t hc = gc;
@@ -315,7 +331,7 @@ static uint32_t handle_vrpc_alloc_dev_or_subdev(gp104_vgpu_dev_t *dev, uint32_t 
         uint32_t gc    = r32(payload, 0x00);
         uint32_t h_dev = r32(payload, 0x04);
         uint32_t h_cls = r32(payload, 0x08);
-        if (is_reserved_plugin_handle(dev->dev_handle, h_dev)) {
+        if (gp104_is_reserved_plugin_handle(dev->dev_handle, h_dev)) {
             return 0xff100007U;
         }
         if (h_cls == NV01_DEVICE_0 && dev->rm.attached && dev->rm.ctl_fd >= 0) {
@@ -341,7 +357,7 @@ static uint32_t handle_vrpc_alloc_dev_or_subdev(gp104_vgpu_dev_t *dev, uint32_t 
     uint32_t h_parent = r32(payload, 0x0c);
     uint32_t h_sub    = r32(payload, 0x10);
     uint32_t h_cls    = (payload_len >= 0x18U) ? r32(payload, 0x14) : NV20_SUBDEVICE_0;
-    if (is_reserved_plugin_handle(dev->dev_handle, h_sub)) {
+    if (gp104_is_reserved_plugin_handle(dev->dev_handle, h_sub)) {
         return 0xff100007U;
     }
     if (dev->rm.attached && dev->rm.ctl_fd >= 0) {
@@ -423,6 +439,9 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
         uint32_t gc = (plen >= 4U) ? r32(payload, 0U) : 0U;
         uint32_t hp = (plen >= 8U) ? r32(payload, 4U) : 0U;
         uint32_t ho = (plen >= 12U) ? r32(payload, 8U) : 0U;
+        if (ho != 0U) {
+            gp104_mmu_on_free_obj(dev, gc, ho);
+        }
         if (dev->rm.attached && dev->rm.ctl_fd >= 0 && ho != 0U) {
             uint32_t hc = 0U;
             if (open_vgpu_rm_lookup_guest_client(&dev->rm, gc, &hc)) {
@@ -430,6 +449,7 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
             }
         }
         if (ho == gc && gc != 0U) {
+            gp104_mmu_on_free_client(dev, gc);
             open_vgpu_rm_free_guest_client(&dev->rm, gc);
         }
         st = open_vgpu_plugin_free_obj(dev, gc, ho);
@@ -444,7 +464,7 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
             st = 0xff100002U;
             break;
         }
-        if (is_reserved_plugin_handle(dev->dev_handle, r32(payload, 0x08))) {
+        if (gp104_is_reserved_plugin_handle(dev->dev_handle, r32(payload, 0x08))) {
             st = 0xff100007U;
             break;
         }
@@ -575,7 +595,7 @@ int gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
                                       payload, plen, avail);
         break;
     default:
-        return 0;
+        return gp104_vrpc_mmu_dispatch(dev, fn, buf, buf_len, tot, out_status);
     }
 
     *out_status = st;
