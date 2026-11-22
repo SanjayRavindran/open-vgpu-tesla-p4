@@ -1,4 +1,4 @@
-# 13 — Tier 2: Open Guest vGPU Kernel Driver (`Phase 2A` Architecture & Host↔Guest Loopback)
+# 13 — Tier 2: Open Guest vGPU Kernel Driver (`Phase 2A` Loopback & `Phase 2B-1` `535.309.01` Kbuild)
 
 ## 1. Objective & Scope Boundary
 
@@ -47,8 +47,37 @@ Reproducible helper that clones/audits `NVIDIA/open-gpu-kernel-modules@535.309.0
 
 ---
 
-## 4. Phase 2B Next Steps (Live AlmaLinux 10.3 `vm-alma` Kernel RM Bringup)
+## 4. What Phase 2B-1 Delivers Today (Full Open `535.309.01` `nvidia.ko` Build)
 
-1. Enable `RMCFG_CHIP_GP104 = 1`, `RMCFG_FEATURE_VIRTUALIZATION = 1`, and `RMCFG_MODULE_RPCSTRUCTURECOPY = 1` in `open-gpu-kernel-modules@535.309.01` (`src/nvidia/generated/` + `nv.c` guest probe guard for `IS_VIRTUAL`).
-2. Populate `src/nvidia/kernel/inc/vgpu/rpc_vgpu.h` & BAR0 `0x8f000` ring transport using the exact `VGX 0x23.0x05` serializers verified in Phase 1B-3 and `open_vgpu_guest_rpc.c`.
-3. Build `nvidia.ko`, `nvidia-modeset.ko`, and `nvidia-drm.ko` from `open-gpu-kernel-modules@535.309.01` inside AlmaLinux 10.3 (`192.168.1.68`), keeping existing guest `nvidia-gridd` and R620 Wayland userspace intact.
+### 4.1 Clean-Room BAR0 `0x8f000` `"VRPC"` Guest RM Overlay ([`open-vgpu-guest/overlay/`](../open-vgpu-guest/overlay/))
+- [`open_vgpu_bar0_rpc.h`](../open-vgpu-guest/overlay/open_vgpu_bar0_rpc.h) & [`open_vgpu_bar0_rpc.c`](../open-vgpu-guest/overlay/open_vgpu_bar0_rpc.c) (`SPDX-License-Identifier: MIT`):
+  - Allocates four `4 KiB` guest system DMA pages (`sendRing`, `recvRing`, `eventRing`, `msgPage`) using `memdescCreate` / `memdescAlloc` / `memdescMap` / `memdescGetPhysAddr(AT_GPU)` and programs BAR0 `0x8f000`..`0x8f058` circular rings (`0x0a` guest ID marker at `0x8f058`, PTE format `(pfnLo << 12) | 0xb`).
+  - Hooks `initRpcObject()` and `rpcSendMessage` / `rpcRecvPoll` via `openVgpuBar0RpcSendMessage()` & `openVgpuBar0RpcRecvPoll()` (`"VRPC"` magic `0x43505256`), executes the initial `VGX 0x23.0x05` handshake (`0x01` `SET_GUEST_SYSTEM_INFO`, `0x40` `SET_GUEST_SYSTEM_INFO_EXT`, chunked `0x50` `67,416` B / `0x10758` B, and chunked `0x9c` `31,536` B / `0x7b30` B), and decodes `OPEN_VGPU_STATIC_INFO_DATA`.
+  - Implements all six vGPU shared-memory / event-ring interrupt entry points declared by `kernel/inc/vgpu/vgpu_events.h`: `vgpuGetPendingEvent`, `vgpuService`, `vgpuShmIsSwPending`, `vgpuShmIsNonStallEnabled`, `vgpuIsNonStallPending`, and `vgpuServiceNonStall`.
+
+### 4.2 Idempotent Source Patcher & Reproducible Kbuild Verifier ([`open-vgpu-guest/scripts/`](../open-vgpu-guest/scripts/))
+- [`patch_open_535_guest_rm.py`](../open-vgpu-guest/scripts/patch_open_535_guest_rm.py): Idempotently patches pristine `NVIDIA/open-gpu-kernel-modules@535.309.01`:
+  - Enables `GP104` chip ID (`{ 0x00000013, 0x00000004, 0x0 }`) in `g_hal_archimpl.h`, registers `registerHalModule_GP104()` reusing `rpcHalIfacesSetup_TU102` in `g_hal_register.h` & `g_hal_private.h`, and maps `arch == 0x13 && impl == 0x4` in `g_chips2halspec_nvoc.c`.
+  - Injects the `OPEN_VGPU_GP104_GATE` check inside `osapi.c` (`rm_is_supported_device()`): maps `pNv->regs->cpu_address + 0x8f000ULL`, reads `0x20` (`NV_VGPU_CONFIG`), and **refuses bare-metal GP104 silicon** cleanly while accepting virtualized vGPU guests.
+  - Wires `IS_VIRTUAL(pGpu)` (`g_gpu_nvoc.h`), `gpu.c` (`gpuDetermineVirtualMode`, `vgpuCreateObject`, `vgpuDestructObject`, `gpuGetStaticInfo`, `gpuGetVgpuRpc`), `objvgpu.c`, `rpc_common.c`, and `rpc_vgpu.h`.
+- [`build_open_535_guest_kmod.sh`](../open-vgpu-guest/scripts/build_open_535_guest_kmod.sh): Clones tag `535.309.01`, runs `patch_open_535_guest_rm.py`, builds full open-source `nv-kernel.o`, `nv-modeset-kernel.o`, and `kernel-open/*.ko` (auto-detecting Ubuntu `/lib/modules/$KVER/build` when `/source` is absent), and asserts `modinfo` + `nm` symbols (`ALL_OPEN_535_GUEST_SYMBOLS_VERIFIED!`).
+
+### 4.3 Observed Build Verification (`192.168.1.15`, Linux `7.0.0-43-generic`, GCC `15.2`)
+Compiled from pristine `NVIDIA/open-gpu-kernel-modules@535.309.01` with **zero proprietary `.o_binary` archives**:
+
+| Artifact | Size (Bytes) | `modinfo` License & Version | Verified Key Symbols (`nm`) |
+| --- | ---: | --- | --- |
+| `src/nvidia/_out/Linux_x86_64/nv-kernel.o` | `10,077,120` | Open RM core (`MIT`) | Links `open_vgpu_bar0_rpc.o` cleanly into `nvidia.ko` |
+| `src/nvidia-modeset/_out/Linux_x86_64/nv-modeset-kernel.o` | `2,484,936` | Open modeset core (`MIT`) | Linked into `nvidia-modeset.ko` |
+| `kernel-open/nvidia.ko` | `25,462,400` | `Dual MIT/GPL`, `535.309.01` | `registerHalModule_GP104`, `openVgpuDetectBar0VirtualMode`, `openVgpuCreateObject`, `openVgpuDestructObject`, `openVgpuBar0RpcSendMessage`, `openVgpuBar0RpcRecvPoll`, `openVgpuGetRpc` |
+| `kernel-open/nvidia-modeset.ko` | `3,104,624` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` against open `nvidia.ko` |
+| `kernel-open/nvidia-drm.ko` | `4,505,744` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` on `7.0.0-43-generic` |
+| `kernel-open/nvidia-uvm.ko` | `57,529,720` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` on `7.0.0-43-generic` |
+
+---
+
+## 5. Phase 2B-2 Next Steps (Live AlmaLinux 10.3 `vm-alma` Deployment & Runtime Verification)
+
+1. Verify `build_open_535_guest_kmod.sh` compilation against `vm-alma` kernel headers (`6.12.0-264.16.1.el10_3.x86_64_v2`), adding any guarded kernel compatibility shims if needed inside `patch_kernel_open_compat()`.
+2. Deploy the open `nvidia*.ko` build inside an isolated/snapshotted AlmaLinux 10.3 `vm-alma` (`192.168.1.68`) test window, keeping existing guest `nvidia-gridd` licensing and R620 Wayland userspace intact.
+3. Expand [`rpc_vgpu.h`](../open-vgpu-guest/overlay/open_vgpu_bar0_rpc.h) typed RPC wrappers as live `nvidia-smi` / CUDA / GNOME Wayland (`:3389`) bringup exercises additional vGPU guest RM ops (`ALLOC_VIDMEM`, `FILL_PTE_MEM`, `UPDATE_PDE_2`, channel alloc).

@@ -19,7 +19,7 @@ description: >-
   4. `open-nvidia-vgpu-mgr` (`open-vgpu-mgr/open_vgpu_mgr.c`, `vmiop_env.c`, `rm_client.c`) -> KVM/VFIO `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d` master/worker runtime daemon, `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), zero-overhead `OPEN_VGPU_PLUGIN_LIB` + `OPEN_VGPU_TRACE_DIR` (`msync` + `memcpy`, **never `/proc/self/mem`** on vGPU mmap pages), and all `60` dynamic `vmiop*` exports + `vmiop_presentation`.
   5. `open-nvidia-smi` & `libopen-nvidia-ml.so` (`open-nvml-smi/open_nvml.c`, `open_nvidia_smi.c`) -> clean-room NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and vGPU instances.
   6. `libopen-nvidia-vgpu.so` (`open-vgpu-plugin/open_vgpu_plugin.c`, `gp104_vgpu_core.c`, `open_vgpu_rm.c`, `open_vrpc_rm.c`, `open_vrpc_mmu.c`, `open_vgpu_static_info.c`) -> `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) + `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B) standalone GP104 core, host RM `NVA081`/`NVA082` bridge, all `47/47` cataloged live VRPC opcodes (with PFN pinning & BAR1/USERD MMIO aperture forwarding), exact VGX `0x23.0x05` `0x50` (`0x10758`B) & `0x9c` (`0x7b30`B) binary static-info serializers, plus hybrid trace interposer alongside `libnvidia-vgpu.so.535.309.01`.
-  7. `open-vgpu-guest` (`open-vgpu-guest/open_vgpu_guest_rpc.{h,c}`, `test_host_guest_loopback.c`, `scripts/prepare_open_535_guest_rm.sh`) + `nova_vgpu_guest.ko` (`kmods/nova_vgpu_guest/`) -> Tier 2 Phase 2A clean-room guest BAR0 `0x8f000` VRPC client, zero-blob host↔guest loopback suite, and Linux `7.0` `kbuild`-verified guest transport (`Phase 2B` next: live AlmaLinux 10.3 `open-gpu-kernel-modules@535.309.01` `nvidia.ko` bringup).
+  7. `open-vgpu-guest` (`open-vgpu-guest/open_vgpu_guest_rpc.{h,c}`, `test_host_guest_loopback.c`, `overlay/open_vgpu_bar0_rpc.{h,c}`, `scripts/prepare_open_535_guest_rm.sh`, `scripts/patch_open_535_guest_rm.py`, `scripts/build_open_535_guest_kmod.sh`) + `nova_vgpu_guest.ko` (`kmods/nova_vgpu_guest/`) -> Tier 2 Phase 2A clean-room guest BAR0 `0x8f000` VRPC client/loopback suite + Phase 2B-1 full zero-blob `NVIDIA/open-gpu-kernel-modules@535.309.01` `nv-kernel.o` (`10,077,120` B) & `nvidia*.ko` (`Dual MIT/GPL`, `registerHalModule_GP104`, `openVgpu*`) builder verified on Linux `7.0.0-43-generic` (`Phase 2B-2` next: live AlmaLinux 10.3 `vm-alma` deploy).
   8. `nvidia-vgpu-vfio.ko` -> MIT-licensed open KVM/VFIO mdev kernel module packaged via DKMS (`nvidia-vgpu-kvm/535.309.01`).
 - **Retained Stable Components**: `nvidia.ko` (`nv-kernel.o_binary`) and `libnvidia-vgpu.so.535.309.01` (used behind `libopen-nvidia-vgpu.so` in hybrid mode for live 2-VM VRPC/DRM parity).
 
@@ -62,6 +62,10 @@ make -C open-vgpu-guest clean all test
 
 # Linux 7.0 kbuild check for clean-room guest VRPC kernel module
 make -C kmods/nova_vgpu_guest KVER=7.0.0-43-generic clean all
+
+# Tier 2 Phase 2B-1: Patch & build full open-source 535.309.01 guest nvidia*.ko (zero .o_binary blobs)
+bash open-vgpu-guest/scripts/build_open_535_guest_kmod.sh --workdir /tmp/open-535-guest-build --kver 7.0.0-43-generic
+rm -rf /tmp/open-535-guest-build
 
 # Clean build binaries before git commit (CI rejects tracked .so/ELF/.ko files)
 make -C open-vgxcfg clean && make -C open-xid-logd clean && make -C open-vgpu-mgr clean && make -C open-nvml-smi clean && make -C open-vgpu-plugin clean && make -C open-vgpu-guest clean && make -C kmods/nova_vgpu_guest KVER=7.0.0-43-generic clean
