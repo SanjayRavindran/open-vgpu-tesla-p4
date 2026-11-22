@@ -240,6 +240,7 @@ Wants=systemd-modules-load.service
 Type=oneshot
 RemainAfterExit=yes
 Environment=NV_VGPU_CFG_FILE=/usr/share/nvidia/vgpu/vgpuConfig.xml
+ExecStartPre=/bin/sh -c 'test -c /dev/nvidiactl || mknod -m 666 /dev/nvidiactl c 195 255; test -c /dev/nvidia0 || mknod -m 666 /dev/nvidia0 c 195 0'
 ExecStart=${OPT_DIR}/nvidia-vgpud
 ExecStartPost=/sbin/modprobe nvidia_vgpu_vfio
 

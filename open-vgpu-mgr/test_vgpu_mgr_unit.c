@@ -524,6 +524,112 @@ static void test_emul_regions_pin_map_and_rm(void)
     printf("  [PASS] test_emul_regions_pin_map_and_rm\n");
 }
 
+static uint8_t *g_vrpc_test_page = NULL;
+
+static uint32_t mock_vrpc_doorbell_cb(void *priv, uint32_t is_write, uint32_t space,
+                                      uint64_t off, uint32_t width, void *data, uint32_t *dummy)
+{
+    (void)priv; (void)space; (void)width;
+    if (dummy) *dummy = 0;
+    if (is_write && (off & 0xffffffULL) == 0x8f050ULL && g_vrpc_test_page != NULL) {
+        uint32_t ok = 0U;
+        memcpy(g_vrpc_test_page + 0x10, &ok, 4U);
+        memcpy(g_vrpc_test_page + 0x20, "\xaa\xbb\xcc\xdd", 4U);
+    } else if (!is_write) {
+        uint32_t val = 0x1bb310deU;
+        memcpy(data, &val, 4U);
+    }
+    return 0U;
+}
+
+static void test_trace_tap_and_vrpc_capture(void)
+{
+    char dir_tmpl[] = "/tmp/test_vgpu_trace_XXXXXX";
+    char *tdir = mkdtemp(dir_tmpl);
+    assert(tdir != NULL);
+
+    vmiope_reset_all();
+    setenv("OPEN_VGPU_TRACE_DIR", tdir, 1);
+
+    uint8_t vrpc_page[0x1000];
+    memset(vrpc_page, 0, sizeof(vrpc_page));
+    uint32_t ver = 0x03000000U, sig = 0x43505256U, len = 0x28U, fn = 0x1aU;
+    uint32_t pending = 0xffffffffU, seq = 7U;
+    memcpy(vrpc_page + 0x00, &ver, 4U);
+    memcpy(vrpc_page + 0x04, &sig, 4U);
+    memcpy(vrpc_page + 0x08, &len, 4U);
+    memcpy(vrpc_page + 0x0c, &fn, 4U);
+    memcpy(vrpc_page + 0x10, &pending, 4U);
+    memcpy(vrpc_page + 0x18, &seq, 4U);
+    memcpy(vrpc_page + 0x20, "\x11\x22\x33\x44", 4U);
+    g_vrpc_test_page = vrpc_page;
+
+    void *saved_mmap_ptr = g_mock_mmap_ptr;
+    g_mock_mmap_ptr = vrpc_page;
+
+    rm_sys_ops_t ops = {
+        .open_fn = mock_open,
+        .close_fn = mock_close,
+        .ioctl_fn = mock_rm_ioctl,
+        .mmap64_fn = mock_mmap64,
+        .munmap_fn = mock_munmap,
+    };
+    rm_set_sys_ops(&ops);
+    vmiope_set_vfio_ioctl_fn(mock_vfio_ioctl);
+
+    uint8_t uuid[VM_UUID_SIZE] = {0};
+    vmiope_init_instance_slot(0, g_mock_vgpu_fd, 0, 0x100, 0x0100U, uuid, "vgpu_type_id=65");
+    vmiope_instance_t *in = vmiope_get_instance(0);
+    in->dev_handle = 11U;
+    assert(rm_alloc_client(&in->hClient) == NV_OK);
+    in->hDevice = 0xde000002U;
+    NV0080_ALLOC_PARAMETERS devp;
+    memset(&devp, 0, sizeof(devp));
+    assert(rm_alloc_object(in->hClient, in->hClient, in->hDevice,
+                           NV01_DEVICE_0, &devp, sizeof(devp)) == NV_OK);
+
+    uint32_t emul_h = 0, reg_id = 0, mem_id = 0;
+    void *hva = NULL;
+    assert(vmiop_register_emul_device_v2(11U, in, (void *)(uintptr_t)mock_vrpc_doorbell_cb,
+                                         "pci_cfg", &emul_h) == 0);
+    assert(vmiop_create_guest_region_v2(11U, 0x1000000ULL, (void *)(uintptr_t)mock_vrpc_doorbell_cb,
+                                        in, VGPU_EMUL_MMIO, &reg_id) == 0);
+    assert(vmiop_relocate_guest_region(reg_id, 0xc0000000ULL) == 0);
+    assert(vmiop_map_guest_memory_v2(11U, 0x200000ULL, 0x1000ULL, &hva, 3U, &mem_id) == 0);
+    assert(hva == vrpc_page);
+
+    uint8_t cfg_val[4] = {0};
+    assert(vmiope_dispatch_emul_space(0, VGPU_EMUL_CONFIG_SPACE, 0ULL, 4U, 0, cfg_val) == 0);
+    uint8_t bell[4] = {1, 0, 0, 0};
+    assert(vmiope_dispatch_emul_space(0, VGPU_EMUL_MMIO, 0xc008f050ULL, 4U, 1, bell) == 0);
+
+    assert(vmiop_unmap_guest_memory(mem_id) == 0);
+    vmiope_reset_all();
+    unsetenv("OPEN_VGPU_TRACE_DIR");
+    g_mock_mmap_ptr = saved_mmap_ptr;
+    g_vrpc_test_page = NULL;
+    rm_reset_sys_ops();
+
+    char tpath[512];
+    snprintf(tpath, sizeof(tpath), "%s/vgpu_trace_pid%ld.jsonl", tdir, (long)getpid());
+    FILE *fp = fopen(tpath, "r");
+    assert(fp != NULL);
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1U, fp);
+    buf[n] = '\0';
+    fclose(fp);
+    assert(strstr(buf, "\"ev\":\"pci_cfg\"") != NULL);
+    assert(strstr(buf, "\"ev\":\"mmio\"") != NULL);
+    assert(strstr(buf, "\"ev\":\"vrpc_req\"") != NULL);
+    assert(strstr(buf, "\"ev\":\"vrpc_rep\"") != NULL);
+    assert(strstr(buf, "\"func\":\"0x1a\"") != NULL);
+    assert(strstr(buf, "\"status\":\"0x0\"") != NULL);
+    assert(strstr(buf, "\"ev\":\"inst_summary\"") != NULL);
+    unlink(tpath);
+    rmdir(tdir);
+    printf("  [PASS] test_trace_tap_and_vrpc_capture\n");
+}
+
 int main(void)
 {
     printf("Running open-nvidia-vgpu-mgr unit tests...\n");
@@ -532,6 +638,7 @@ int main(void)
     test_sync_and_threads();
     test_config_plugins_and_presentation();
     test_emul_regions_pin_map_and_rm();
+    test_trace_tap_and_vrpc_capture();
     printf("ALL open-nvidia-vgpu-mgr UNIT TESTS PASSED!\n");
     return 0;
 }

@@ -468,6 +468,42 @@ fn put_u32(buf: &mut [u8], off: usize, val: u32) {
     buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
 }
 
+/// Parse the character device major number for `name` from `/proc/devices` contents.
+pub fn parse_chardev_major(proc_devices: &str, name: &str) -> Option<u32> {
+    let mut in_char = false;
+    for line in proc_devices.lines() {
+        let trimmed = line.trim();
+        if !in_char {
+            if trimmed == "Character devices:" {
+                in_char = true;
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            break;
+        }
+        let mut parts = trimmed.split_whitespace();
+        if let (Some(maj_s), Some(dev_name)) = (parts.next(), parts.next()) {
+            if dev_name == name {
+                if let Ok(maj) = maj_s.parse::<u32>() {
+                    return Some(maj);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Encode `(major, minor)` using the glibc/Linux `makedev` dev_t bit layout.
+pub const fn linux_makedev(major: u32, minor: u32) -> u64 {
+    let maj = major as u64;
+    let min = minor as u64;
+    (min & 0xff)
+        | ((maj & 0xfff) << 8)
+        | ((min & !0xff) << 12)
+        | ((maj & !0xfff) << 32)
+}
+
 #[cfg(unix)]
 pub mod linux {
     use super::*;
@@ -477,9 +513,13 @@ pub mod linux {
         fn open(pathname: *const i8, flags: i32, ...) -> i32;
         fn close(fd: i32) -> i32;
         fn ioctl(fd: i32, request: usize, ...) -> i32;
+        fn mknod(pathname: *const i8, mode: u32, dev: u64) -> i32;
+        fn chmod(pathname: *const i8, mode: u32) -> i32;
     }
 
     const O_RDWR: i32 = 2;
+    const S_IFCHR_0666: u32 = 0o020666;
+    const NV_CTL_DEFAULT_MAJOR: u32 = 195;
 
     pub struct LinuxRmTransport {
         ctl_fd: i32,
@@ -487,7 +527,31 @@ pub mod linux {
     }
 
     impl LinuxRmTransport {
+        fn ensure_nvidia_char_node(path: &str, minor: u32) {
+            if std::path::Path::new(path).exists() {
+                return;
+            }
+            let major = std::fs::read_to_string("/proc/devices")
+                .ok()
+                .and_then(|s| parse_chardev_major(&s, "nvidia-frontend"))
+                .or_else(|| {
+                    std::fs::read_to_string("/proc/devices")
+                        .ok()
+                        .and_then(|s| parse_chardev_major(&s, "nvidia"))
+                })
+                .unwrap_or(NV_CTL_DEFAULT_MAJOR);
+            if let Ok(cpath) = CString::new(path) {
+                let dev = linux_makedev(major, minor);
+                unsafe {
+                    if mknod(cpath.as_ptr(), S_IFCHR_0666, dev) == 0 {
+                        let _ = chmod(cpath.as_ptr(), 0o666);
+                    }
+                }
+            }
+        }
+
         pub fn open() -> Result<Self, String> {
+            Self::ensure_nvidia_char_node("/dev/nvidiactl", 255);
             let path = CString::new("/dev/nvidiactl").map_err(|e| e.to_string())?;
             let ctl_fd = unsafe { open(path.as_ptr(), O_RDWR) };
             if ctl_fd < 0 {
@@ -595,6 +659,7 @@ pub mod linux {
                 return Ok(());
             }
             let dev_path = format!("/dev/nvidia{minor}");
+            Self::ensure_nvidia_char_node(&dev_path, minor);
             let cpath = CString::new(dev_path.as_str()).map_err(|e| e.to_string())?;
             let fd = unsafe { open(cpath.as_ptr(), O_RDWR) };
             if fd < 0 {
@@ -872,5 +937,23 @@ mod tests {
         assert_eq!(summary.gpus[0].profiles_registered, 0);
         assert!(summary.gpus[0].skipped_reason.is_some());
         assert!(!mock.calls.iter().any(|c| c.contains("0xa0810101")));
+    }
+
+    #[test]
+    fn test_parse_chardev_major_and_makedev() {
+        let proc_txt = "\
+Character devices:
+  1 mem
+195 nvidia-frontend
+240 vfio
+
+Block devices:
+  8 sd
+";
+        assert_eq!(parse_chardev_major(proc_txt, "nvidia-frontend"), Some(195));
+        assert_eq!(parse_chardev_major(proc_txt, "vfio"), Some(240));
+        assert_eq!(parse_chardev_major(proc_txt, "sd"), None);
+        assert_eq!(linux_makedev(195, 255), 0x0000_c3ff);
+        assert_eq!(linux_makedev(195, 0), 0x0000_c300);
     }
 }

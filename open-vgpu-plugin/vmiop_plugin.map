@@ -1,0 +1,17 @@
+VER_2_0 {
+    global:
+        vmiop_display_vmiop_env;
+};
+
+VER_3_0 {
+} VER_2_0;
+
+VER_4_0 {
+} VER_3_0;
+
+VER_5_0 {
+    global:
+        vmiop_display_vmiop_plugin;
+    local:
+        *;
+} VER_4_0;

@@ -1,0 +1,181 @@
+# 12 — Open `vmiop` Plugin (`libopen-nvidia-vgpu.so`), Cold-Boot Fixes & Live 2-VM VRPC Trace Catalog
+
+## 1. Overview & Status
+
+This document records the design, binary interface parity, bug fixes, and live 2-VM wire-level traces for **Phase 1A** of `docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md`: the clean-room `vmiop` host device mediator (`open-vgpu-plugin/` -> `libopen-nvidia-vgpu.so`), paired with the `open-vgpu-mgr` trace tap (`open-vgpu-mgr/vmiop_env.c`) and the cold-boot `/dev/nvidiactl` character device fix (`nova-vgpu/src/rm_ioctl.rs`).
+
+> **Scope Boundary:** In accordance with project policy, `nvidia-gridd` and NVIDIA vGPU DLS/license enforcement (`libnvidia-vgpu.so` guest license verification inside VM RM RPCs) remain untouched. During live 2-VM operation on `192.168.1.24`, `libopen-nvidia-vgpu.so` runs in **hybrid interposer mode** alongside `/opt/nvidia-vgpu-535/lib/libnvidia-vgpu.so.535.309.01`, while `open-vgpu-plugin/` ALSO provides a **standalone GP104 clean-room core** (`gp104_vgpu_core.c`) verified via self-contained unit tests with zero proprietary plugin dependency.
+
+---
+
+## 2. REA `6.10.1` Evidence & `vmiop` Binary ABI
+
+Generated on `192.168.1.15` via `rea --json` and stored under `evidence/vgpu-535-rea610/`:
+- [`libnvidia-vgpu.so.535.309.01.exports.json`](../evidence/vgpu-535-rea610/libnvidia-vgpu.so.535.309.01.exports.json) (`1,180,654` bytes)
+- [`libnvidia-vgpu.so.535.309.01.exposure.json`](../evidence/vgpu-535-rea610/libnvidia-vgpu.so.535.309.01.exposure.json) (`9,596` bytes)
+- [`libnvidia-vgpu.so.535.309.01.layout.json`](../evidence/vgpu-535-rea610/libnvidia-vgpu.so.535.309.01.layout.json) (`972` bytes)
+
+`open-vgpu-plugin/` exports the exact versioned ELF symbol ABI expected by both upstream QEMU `vmiop` hosts and `open-nvidia-vgpu-mgr` (enforced via `open-vgpu-plugin/vmiop_plugin.map`):
+
+| Symbol | ELF Version | Size | Role |
+|---|---|---|---|
+| `vmiop_display_vmiop_plugin` | `VER_5_0` | `0xa8` (`168` bytes) | Plugin descriptor (`signature = "VMIOP_PLUGIN_SIGNATURE"`, `version = 0x50000`, `plugin_class = 1`, `input_classes = 0x202`, lifecycle & attribute callbacks) |
+| `vmiop_display_vmiop_env` | `VER_2_0` | `0x38` (`56` bytes) | Host callback function table bound at plugin load (`register_emul_device_v2`, `create_guest_region_v2`, `map_guest_memory_v2`, `inject_msi`, `unpin_pages`, etc.) |
+
+### Operating Modes in `libopen-nvidia-vgpu.so`
+1. **Standalone GP104 Mode (`gp104_vgpu_core.c`)**: Selected automatically when `OPEN_VGPU_PLUGIN_STANDALONE=1` or when no vendor `.so` is loaded. Emulates PCI config space (`10de:1bb3`, `subsys 10de:1206`), BAR0/BAR1/BAR3 sizing & relocation (`16 MiB` / `256 MiB` / `32 MiB`), BAR0 registers (`NV_PMC_BOOT_0 = 0x134000a1`, `NV_PFB_CSTATUS`, `NV_PTIMER`, `0x088068 = 0x00810005`), BAR0 `0x8f000` mailbox/rings, `VMMU`, `CHIDMGR`, and VRPC dispatch.
+2. **Hybrid Interposer Mode (`open_vgpu_plugin.c`)**: Selected by default when `libnvidia-vgpu.so.535.309.01` is present in `OPEN_VGPU_VENDOR_PLUGIN` / `/opt/nvidia-vgpu-535/lib/libnvidia-vgpu.so.535.309.01`. Forwards `vmiop_display_vmiop_plugin` calls and host `vmiop_env_v2_t` bindings transparently while logging structured lifecycle events when `OPEN_VGPU_TRACE_DIR` is set.
+
+---
+
+## 3. Root-Cause Fixes Discovered & Verified on Hardware
+
+### 3.1 Cold-Boot `/dev/nvidiactl` & `/dev/nvidia0` Race (`open-nvidia-vgpud`)
+- **Symptom**: On a fresh cold boot before `nvidia-smi` ran, `nvidia-kernel` did not yet auto-create `/dev/nvidiactl` (`195:255`) or `/dev/nvidia0` (`195:0`), causing `open-nvidia-vgpud` (`nvidia-vgpud.service`) to fail on first start.
+- **Fix**:
+  - `nova-vgpu/src/rm_ioctl.rs`: Added `parse_chardev_major()`, `linux_makedev()`, and `LinuxRmTransport::ensure_nvidia_char_node()` (reading `"nvidia-frontend"` major from `/proc/devices`, defaulting to `195`, creating missing `/dev/nvidiactl` (`255`) and `/dev/nvidiaN` (`N`) nodes prior to `open()`), covered by unit test `test_parse_chardev_major_and_makedev`.
+  - `scripts/install_vgpu_host_dkms.sh`: Added `ExecStartPre` mknod guard to `nvidia-vgpud.service`.
+- **Verification**: Cold-boot tested on `192.168.1.24`: `nvidia-vgpud` registered all `12` Tesla P4 profiles (`RM mode 3`, `535.309.01`), creating `/sys/bus/pci/devices/0000:01:00.0/mdev_supported_types/nvidia-65` (`GRID P4-4Q`) automatically at boot.
+
+### 3.2 `nvidia_vma_access` Kernel Panic Avoidance in `open-vgpu-mgr` Trace Tap
+- **Discovery**: Attempting to read guest mmap'd VFIO/vGPU ring VA pages via `pread(/proc/self/mem, ...)` inside the trace tap triggered a Linux kernel `BUG: kernel NULL pointer dereference` inside `nvidia_vma_access` (`[nvidia]`) called from `__x64_sys_pread64`.
+- **Fix**: Removed `/proc/self/mem` completely from `open-vgpu-mgr/vmiop_env.c`; replaced it with direct pointer reads guarded by `msync(page_base, 0x1000, MS_ASYNC) == 0`, eliminating the kernel fault completely while keeping zero overhead when `OPEN_VGPU_TRACE_DIR` is unset.
+
+---
+
+## 4. Live 2-VM Trace Capture (`192.168.1.24`, Concurrent `GRID P4-4Q`)
+
+Captured on `192.168.1.24` with `open-nvidia-vgpu-mgr` + `OPEN_VGPU_PLUGIN_LIB=libopen-nvidia-vgpu.so` + `OPEN_VGPU_TRACE_DIR=/tmp/vgpu-trace` while booting both `nvidia-65` (`GRID P4-4Q`, `4000MiB` each) VMs concurrently to `Licensed` steady state, followed by graceful shutdown via `vgpu-vms.service`:
+
+### 4.1 Plugin Lifecycle Call Sequence (`vgpu_plugin_pid*.jsonl`)
+Both `vm-alma` (`PID 3149`) and `vm-win11` (`PID 3202`) executed the exact same `8`-call `VER_5_0` sequence (`rc = 0`, `mode = "hybrid"`):
+1. `plug_set_attr("vgpu_type_id")` (`rc=0`)
+2. `plug_set_attr("gpu-pci-id")` (`rc=0`)
+3. `plug_set_attr("vgpu-dev-name")` (`rc=0`)
+4. `plug_get_attr("vmiop_vgpu_cap")` (`rc=0`)
+5. `plug_set_attr("vmiop_vmm_migration_supported")` (`rc=0`)
+6. `plug_init("init_routine")` (`rc=0`)
+7. `plug_reset("reset_device")` (`rc=0`)
+8. `plug_shutdown("shutdown_routine")` (`rc=0`)
+
+### 4.2 High-Level Comparison (`vm-alma` vs `vm-win11`)
+
+| Metric | `vm-alma` (`PID 3149`, Guest `535.309.01`) | `vm-win11` (`PID 3202`, Guest `539.72`) |
+|---|---|---|
+| Guest Profile / License | `nvidia-65` (`GRID P4-4Q`), `Licensed` | `nvidia-65` (`GRID P4-4Q`), `Licensed` |
+| `region_create` (`0x1` / `0x2` / `0x3`) | `16 MiB` / `256 MiB` / `32 MiB` | `16 MiB` / `256 MiB` / `32 MiB` |
+| Initial Relocated GPAs | `0x81000000` / `0x800000000` / `0x810000000` | `0x81000000` / `0x800000000` / `0x810000000` |
+| `region_map` calls (`add=1` / `add=0`) | `22` (`11` / `11`) | `22` (`11` / `11`) |
+| `mem_map` / `mem_unmap` calls | `132` / `132` | `23` / `23` |
+| `pin_calls` / `pin_pages` | `122` / `59,074` (`~230.8 MiB`) | `111` / `5,693` (`~22.2 MiB`) |
+| `msi_count` | `5,001` | `4,996` |
+| `pci_cfg` accesses | `2,256` | `2,691` |
+| BAR0 `0x8f000..0x8ffff` MMIO accesses | `2,793` | `7,462` |
+| Non-`0x8f000` BAR0 MMIO accesses | `30,411` (`4,000` logged, `26,411` suppressed) | `28` logged (`0` suppressed) |
+| Unique VRPC Opcodes (`vrpc_req` total) | `34` (`2,764` req / `22` sampled rep) | `39` (`7,430` req / `727` sampled rep) |
+
+> Note on `vrpc_rep` counts: `open-vgpu-mgr` logs `vrpc_rep` only on sampled synchronous ring phases (`doorbell_post` / `mem_unmap`) when status transitions away from `0xffffffff`; every sampled `vrpc_rep` reported `status = 0x0`.
+
+---
+
+## 5. Observed PCI Config, Non-`0x8f000` BAR0 & `0x8f000` Registers
+
+### 5.1 PCI Config Space Reads & Writes (`pci_cfg`)
+- **Identity & Subsystem**: `0x00 = 0x1bb310de` (Tesla P4), `0x08 = 0x030000a1` (VGA Controller rev `0xa1`), `0x2c = 0x120610de` (`GRID P4-4Q`), `0x3d = 0x01` (`INTA#`).
+- **Capability Chain**: `0x34 = 0xd0` -> NVIDIA vGPU Vendor Cap (`0xd0 = 0x561b6809`: cap ID `0x09`, next `0x68`, len `0x1b`, `'V','F', 0x00, 0x16`, payload `"535.309.01r539_72"` across `0xd7..0xe7`) -> MSI Cap (`0x68 = 0x00800005`, next `0x00`, guest writes MSI vector/addr at `0x6a`, `0x6c`, `0x70`, `0x74`).
+- **Observed Non-Zero Device Words (`0x50..0x58`)**: `0x50 = 0x1`, `0x54 = 0x1`, `0x58 = 0x0023d6ce`.
+
+### 5.2 Non-`0x8f000` BAR0 MMIO Accesses (Normalized `bar_off & 0xffffff`)
+
+| BAR0 Offset | Meaning / Role | `vm-alma` (`PID 3149`) | `vm-win11` (`PID 3202`) |
+|---|---|---|---|
+| `0x000000` | `NV_PMC_BOOT_0` | R `17`x (`0x134000a1`) | R `1`x (`0x134000a1`) |
+| `0x000004` | `NV_PMC_ENABLE` | R `5`x (`0x10100`) | R `3`x (`0x10100`) |
+| `0x000100` | `NV_PMC_INTR_0` | R `30`x (`0x0`, `0x80000000`) | R `1`x (`0x80000000`) |
+| `0x000140` | `NV_PMC_INTR_EN_0` | R `2,939`x (`0x0`, `0x80000000`) | R `5`x (`0x0`, `0x80000000`) |
+| `0x0001a0` | PMC guest ack/write | W `2`x (`0x0`, `0x1`) | W `2`x (`0x0`, `0x1`) |
+| `0x000a00` | `NV_PMC_BOOT_42` | R `3`x (`0x134a1000`) | R `2`x (`0x134a1000`) |
+| `0x001074` | `NV_PBUS` scratch | R `1`x (`0x0`) | R `1`x (`0x0`) |
+| `0x002a78` | `NV_PBUS` scratch | R `1`x (`0x0`) | R `1`x (`0x0`) |
+| `0x009100` | Timer / config | R `29`x (`0x0`) | — |
+| `0x009400` | `NV_PTIMER_TIME_0` | R `318`x (`ns_lo`) | R `4`x (`ns_lo`) |
+| `0x009410` | `NV_PTIMER_TIME_1` | R `637`x (`ns_hi`) | — |
+| `0x021584` | `NV_PFUSE` / master | R `1`x (`0x0`) | R `1`x (`0x0`) |
+| `0x070004` | VBIOS / PRAMIN window | R `3`x (`0x0`), W `3`x (`0x1`) | — |
+| `0x070010` | VBIOS / PRAMIN window | R `3`x (`0x0`), W `3`x (`0x1`) | — |
+| `0x088068` | PCIe/virtual config | R `1`x (`0x810005`) | R `2`x (`0x810005`) |
+| `0x088080`..`0x088430` | PCIe virtual regs (`0x88080`, `0x8814c`, `0x88424`, `0x88430`) | R `1`x each (`0x0`) | R `1`x each (`0x0`) |
+| `0x9a0204` | Bar0 probe (`Win11`) | — | R `1`x (`0x0`) |
+
+### 5.3 BAR0 `0x8f000` (`NV_VGPU`) Mailbox Registers
+
+| BAR0 Offset | `vm-alma` (`PID 3149`) | `vm-win11` (`PID 3202`) | Role |
+|---|---|---|---|
+| `0x8f000` / `0x8f004` | W `2x/1x` (`0x2337e80b` / `0x1`, then `0x0`) | W `2x/1x` (`0xffff880b` / `0x1`, then `0x0`) | Send ring GPA + enable |
+| `0x8f010` / `0x8f014` | W `2x/1x` (`0x2338180b` / `0x1`, then `0x0`) | W `2x/1x` (`0xffff780b` / `0x1`, then `0x0`) | Recv ring GPA + enable |
+| `0x8f020` | R `6x` (`0x40882f1`), W `1x` (`0x0`) | R `5x` (`0x40882f1`), W `1x` (`0x0`) | `NV_VGPU_CONFIG` (`0x040882f1`) |
+| `0x8f028` / `0x8f02c` | R `1x` (`0x0`), W `1x/1x` (`0x0` / `0x3ff`) | R `1x` (`0x0`), W `1x/1x` (`0x0` / `0x3ff`) | Intr status / enable (`0x3ff`) |
+| `0x8f030` / `0x8f034` | W `2x/1x` (`0x675300b` / `0x1`, then `0x0`) | W `2x/1x` (`0xffff900b` / `0x1`, then `0x0`) | Event ring GPA + enable |
+| `0x8f038` / `0x8f03c` | R `1x` (`0x0`), W `1x` (`0x0`) | R `1x` (`0x0`), W `1x` (`0x0`) | Event ring put / get |
+| `0x8f050` | W `2,764x` (`0x0`) | W `7,429x` (`0x0`) | **RPC Doorbell** |
+| `0x8f058` / `0x8f05c` | W `1x` (`0xa`), R `1x` (`0x0`) | W `1x` (`0x1a`), R `1x` (`0x0`) | Guest OS tag (`0xa` Linux / `0x1a` Win) & info |
+| `0x8f068` | — | W `2x` (`0x0`) | Control reset/ack |
+| `0x8f080` / `0x8f084` | W `2x/1x` (`0x2338700b` / `0x1`, then `0x0`) | W `2x/1x` (`0xffff600b` / `0x1`, then `0x0`) | Auxiliary shared ring 2 |
+| `0x8f088` / `0x8f08c` | — | W `2x/1x` (`0xffff500b` / `0x1`, then `0x0`) | Auxiliary shared ring 3 (Win11) |
+| `0x8f090` / `0x8f094` | W `2x/1x` (`0x8aef00b` / `0x1`, then `0x0`) | W `2x/1x` (`0xffff400b` / `0x1`, then `0x0`) | Auxiliary shared ring 4 |
+
+---
+
+## 6. Complete Live VRPC Opcode Catalog (`PID 3149` + `PID 3202`)
+
+Every VRPC message observed used header version `0x03000000` (bytes `00 00 00 03 56 52 50 43` = `"VRPC"`) and valid response status `0x0`. Below is the complete union of opcodes across both guests (`34` on `vm-alma`, `39` on `vm-win11`, `26` shared + `8` Linux-only + `13` Windows-only = `47` distinct opcodes total):
+
+| Opcode | Plugin Symbol / Role | `vm-alma` (`PID 3149`) req (len) | `vm-win11` (`PID 3202`) req (len) |
+|---|---|---|---|
+| `0x01` | `VRPC_FN_SET_GUEST_SYSTEM_INFO` | `1` (`824`) | `1` (`824`) |
+| `0x02` | `VRPC_FN_ALLOC_ROOT` | `43` (`140`) | `50` (`140`) |
+| `0x04` | `VRPC_FN_ALLOC_DEVICE` | `122` (`88`) | `31` (`88`) |
+| `0x05` | `VRPC_FN_ALLOC_SUBDEVICE` | `5` (`88`) | — |
+| `0x06` | `VRPC_FN_ALLOC_MEMORY` | `42` (`280`) | `31` (`280`) |
+| `0x07` | `VRPC_FN_ALLOC_OBJECT` | `3` (`88`) | `6` (`88`) |
+| `0x09` | `VRPC_FN_FREE` | `107` (`112`) | `214` (`112`) |
+| `0x0a` | `VRPC_FN_CONTROL` | `513` (`48`) | `9` (`48`) |
+| `0x0c` | `VRPC_FN_MAP_MEMORY` | `449` (`128`) | `9` (`128`) |
+| `0x0e` | `VRPC_FN_MAP_MEMORY_DMA` | `539` (`88`) | `54` (`88`) |
+| `0x0f` | `VRPC_FN_UNMAP_MEMORY_DMA` | `328` (`72`) | — |
+| `0x13` | `VRPC_FN_SET_OBJECT` | `47` (`72`) | `50` (`72`) |
+| `0x15` | `VRPC_FN_OP_15` | `14` (`60`) | `28` (`60`) |
+| `0x17` | `VRPC_FN_OP_17` | `24` (`60`) | `11` (`60`) |
+| `0x1a` | `VRPC_FN_RM_API_CONTROL` | `78` (`64`) | `125` (`64`) |
+| `0x1b` | `VRPC_FN_OP_1B` | — | `3,804` (`136`) |
+| `0x1c` | `VRPC_FN_OP_1C` | — | `17` (`152`) |
+| `0x20` | `VRPC_FN_SET_GUEST_FB_INFO` | `43` (`96`) | `50` (`96`) |
+| `0x21` | `VRPC_FN_SET_GUEST_SEMA_MEM` | — | `6` (`128`) |
+| `0x2b` | `VRPC_FN_OP_2B` | — | `5` (`56`) |
+| `0x34` | `VRPC_FN_OP_34` | `165` (`128`) | `11` (`128`) |
+| `0x38` | `VRPC_FN_OP_38` | — | `2,777` (`96`) |
+| `0x39` | `VRPC_FN_OP_39` | `2` (`52`) | `2` (`52`) |
+| `0x3b` | `VRPC_FN_OP_3B` | — | `1` (`36`) |
+| `0x3d` | `VRPC_FN_OP_3D` | — | `4` (`80`) |
+| `0x3e` | `VRPC_FN_OP_3E` | `3` (`44`) | — |
+| `0x3f` | `VRPC_FN_SET_GUEST_SYSTEM_EXT` | `6` (`48`) | `6` (`48`) |
+| `0x40` | `VRPC_FN_SET_GUEST_BRANCH_VER` (`"r539_72"`) | `1` (`296`) | `1` (`296`) |
+| `0x50` | `VRPC_FN_BATCH_50` | `17` (`2560, 4096`) | `17` (`2560, 4096`) |
+| `0x55` | `VRPC_FN_GET_STATIC_INFO` | — | `3` (`40`) |
+| `0x5b` | `VRPC_FN_OP_5B` | — | `23` (`1584`) |
+| `0x5c` | `VRPC_FN_OP_5C` | `7` (`48`) | `3` (`48`) |
+| `0x61` | `VRPC_FN_OP_61` | `28` (`48`) | `31` (`48`) |
+| `0x62` | `VRPC_FN_OP_62` | `2` (`48`) | `4` (`48`) |
+| `0x6e` | `VRPC_FN_OP_6E` | `2` (`44`) | — |
+| `0x70` | `VRPC_FN_OP_70` | `3` (`144`) | `7` (`144`) |
+| `0x71` | `VRPC_FN_OP_71` | `2` (`72`) | — |
+| `0x72` | `VRPC_FN_OP_72` | `3` (`64`) | `3` (`64`) |
+| `0x78` | `VRPC_FN_OP_78` | — | `5` (`44`) |
+| `0x79` | `VRPC_FN_OP_79` | `18` (`48`) | `4` (`48`) |
+| `0x7a` | `VRPC_FN_OP_7A` | `135` (`96`) | — |
+| `0x7c` | `VRPC_FN_OP_7C` | `2` (`3120`) | — |
+| `0x7d` | `VRPC_FN_OP_7D` | — | `1` (`196`) |
+| `0x7e` | `VRPC_FN_OP_7E` | `2` (`1392`) | — |
+| `0x8e` | `VRPC_FN_OP_8E` | — | `4` (`476`) |
+| `0x8f` | `VRPC_FN_OP_8F` | — | `14` (`56`) |
+| `0x9c` | `VRPC_FN_SYNC_9C` | `8` (`3184, 4096`) | `8` (`3184, 4096`) |

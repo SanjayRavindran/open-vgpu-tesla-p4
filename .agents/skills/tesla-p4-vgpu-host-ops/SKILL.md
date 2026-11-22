@@ -13,7 +13,7 @@ description: >-
 ## Host Overview
 - **Host IP & Bridge**: `192.168.1.24/24` on `br0` (`MAC d0:50:99:7c:84:dd`, gateway `192.168.1.1` in `/etc/netplan/00-installer-config.yaml`)
 - **Firmware & Silicon**: UEFI Coreboot `df45ea2c49b4-dirty` on Gigabyte `H61M-S1 PLUS`, Intel Xeon E3-1275 V2 (`4C/8T`, `x86-64-v2`), Intel VT-d (`DMAR`) active, Above-4G 64-bit BAR1 (`0xfe0000000`)
-- **Host Driver & Open Daemons**: DKMS `nvidia-vgpu-kvm/535.309.01` on Ubuntu 26.04 LTS (`7.0.0-43-generic`, `/updates/dkms/{nvidia,nvidia-vgpu-vfio}.ko.zst`), module autoload `/etc/modules-load.d/nvidia-vgpu.conf`, userspace runtime in `/opt/nvidia-vgpu-535/` running all 6 clean-room open-source host binaries (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`, `open-nvidia-smi`, `libopen-nvidia-ml.so`) alongside `libnvidia-vgpu.so.535.309.01`
+- **Host Driver & Open Daemons**: DKMS `nvidia-vgpu-kvm/535.309.01` on Ubuntu 26.04 LTS (`7.0.0-43-generic`, `/updates/dkms/{nvidia,nvidia-vgpu-vfio}.ko.zst`), module autoload `/etc/modules-load.d/nvidia-vgpu.conf`, userspace runtime in `/opt/nvidia-vgpu-535/` running all 7 clean-room open-source host binaries/libraries (`open-nvidia-vgpud` with cold-boot `/dev/nvidiactl` mknod guard, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`, `open-nvidia-smi`, `libopen-nvidia-ml.so`, and `libopen-nvidia-vgpu.so` Phase 1A plugin alongside `libnvidia-vgpu.so.535.309.01`)
 - **Active 50/50 VMs (`vgpu-vms.service` -> `/home/zero/vms/start_all_vms.sh`)**:
   - `vm-alma` (`192.168.1.68`): `4 vCPU`, `5120M` RAM, mdev `11111111-0000-0000-0000-000000000003` (`nvidia-65` / `GRID P4-4Q`, `4096M` VRAM)
   - `vm-win11` (`192.168.1.65`): `4 vCPU`, `6144M` RAM, mdev `11111111-0000-0000-0000-000000000005` (`nvidia-65` / `GRID P4-4Q`, `4096M` VRAM)
@@ -38,7 +38,7 @@ If `nvidia-smi` fails or `dmesg` reports `NVRM: API mismatch: the client has the
    sudo ln -sf /opt/nvidia-vgpu-535/libnvidia-ml.so.535.309.01 /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
    sudo ldconfig
    ```
-3. Verify both `nvidia-vgpud.service` and `nvidia-vgpu-mgr.service` are active and two `vgpu` processes (`4000MiB` each) appear in `nvidia-smi`.
+3. Verify `nvidia-vgpud.service` (includes `ExecStartPre` mknod guard for `/dev/nvidiactl` & `/dev/nvidia0` on cold boot) and `nvidia-vgpu-mgr.service` are active and two `vgpu` processes (`4000MiB` each) appear in `nvidia-smi`. Optional live VRPC/BAR0 tracing uses `OPEN_VGPU_PLUGIN_LIB=libopen-nvidia-vgpu.so` + `OPEN_VGPU_TRACE_DIR=/tmp/vgpu-trace` via a transient drop-in under `/run/systemd/system/nvidia-vgpu-mgr.service.d/` (run `sync` after binary installs; never use `/proc/self/mem` on vGPU mmap pages).
 
 ### 2. Verify or Restart the 50/50 2-VM Split
 - Pascal GP104 requires **homogeneous** vGPU profile sizes across concurrent VMs (`2× nvidia-65` / `GRID P4-4Q`).

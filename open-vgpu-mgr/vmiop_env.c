@@ -183,6 +183,249 @@ static vmiope_log_hook_fn_t   g_log_hook      = NULL;
 static int default_vfio_ioctl(int fd, unsigned long req, void *arg) { return ioctl(fd, req, arg); }
 static vmiope_vfio_ioctl_fn_t g_vfio_ioctl    = default_vfio_ioctl;
 
+/* -------------------------------------------------------------------------
+ * Optional Env-Gated Live Trace Tap (OPEN_VGPU_TRACE_DIR)
+ * ------------------------------------------------------------------------- */
+#define TRACE_MAX_MEMS       128U
+#define TRACE_MMIO_CAP       4000U
+#define TRACE_HEX_MAX_BYTES  128U
+#define TRACE_VRPC_MAGIC     0x43505256U
+
+typedef struct {
+    int      in_use;
+    uint32_t mem_id;
+    uint64_t gpa;
+    uint64_t size;
+    void    *hva;
+} trace_guest_mem_t;
+
+typedef struct {
+    uint32_t send_lo, send_hi;
+    uint32_t recv_lo, recv_hi;
+    uint32_t ev_lo, ev_hi;
+    uint32_t uvm_send_lo, uvm_send_hi;
+    uint64_t mmio_non8f_logged;
+    uint64_t mmio_non8f_suppressed;
+    uint64_t mmio_8f_count;
+    uint64_t pci_cfg_count;
+    uint64_t pin_calls;
+    uint64_t pin_pages;
+    uint64_t msi_count;
+    uint32_t last_req_seq;
+    uint32_t last_req_func;
+    int      has_req;
+    uint32_t last_rep_seq;
+    uint32_t last_rep_func;
+    uint32_t last_rep_res;
+    int      has_rep;
+} trace_inst_stats_t;
+
+static pthread_mutex_t    g_trace_lock      = PTHREAD_MUTEX_INITIALIZER;
+static int                g_trace_init_done = 0;
+static FILE              *g_trace_fp        = NULL;
+static trace_guest_mem_t  g_trace_mems[VMIOP_MAX_INSTANCES][TRACE_MAX_MEMS];
+static trace_inst_stats_t g_trace_stats[VMIOP_MAX_INSTANCES];
+
+static uint64_t trace_mono_ns(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0ULL;
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static void trace_ensure_init_locked(void)
+{
+    if (g_trace_init_done) return;
+    g_trace_init_done = 1;
+    const char *dir = getenv("OPEN_VGPU_TRACE_DIR");
+    if (!dir || dir[0] == '\0') return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/vgpu_trace_pid%ld.jsonl", dir, (long)getpid());
+    FILE *fp = fopen(path, "a");
+    if (!fp) return;
+    g_trace_fp = fp;
+    fprintf(g_trace_fp, "{\"ts\":%llu,\"ev\":\"trace_start\",\"pid\":%ld}\n",
+            (unsigned long long)trace_mono_ns(), (long)getpid());
+    fflush(g_trace_fp);
+}
+
+static int trace_active(void)
+{
+    if (!g_trace_init_done) {
+        pthread_mutex_lock(&g_trace_lock);
+        trace_ensure_init_locked();
+        pthread_mutex_unlock(&g_trace_lock);
+    }
+    return g_trace_fp != NULL;
+}
+
+static int trace_safe_read_mem(const void *hva, void *dst, size_t len)
+{
+    if (!hva || !dst || len == 0U || len > 0x1000U) return -1;
+    uintptr_t page_start = ((uintptr_t)hva) & ~(uintptr_t)0xfffULL;
+    uintptr_t page_end   = (((uintptr_t)hva) + len - 1ULL) & ~(uintptr_t)0xfffULL;
+    if (msync((void *)page_start, (size_t)(page_end - page_start + 0x1000ULL), MS_ASYNC) != 0) {
+        return -1;
+    }
+    memcpy(dst, hva, len);
+    return 0;
+}
+
+static void trace_bytes_to_hex(const uint8_t *src, size_t len, char *out, size_t out_sz)
+{
+    static const char hex[] = "0123456789abcdef";
+    size_t pos = 0U;
+    for (size_t i = 0; i < len && (pos + 2U) < out_sz; i++) {
+        out[pos++] = hex[(src[i] >> 4) & 0xfU];
+        out[pos++] = hex[src[i] & 0xfU];
+    }
+    out[pos] = '\0';
+}
+
+static void trace_json_escaped(FILE *fp, const char *s)
+{
+    fputc('"', fp);
+    if (s) {
+        for (const char *p = s; *p; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (c == '"' || c == '\\') {
+                fputc('\\', fp);
+                fputc((int)c, fp);
+            } else if (c >= 0x20U) {
+                fputc((int)c, fp);
+            } else {
+                fputc(' ', fp);
+            }
+        }
+    }
+    fputc('"', fp);
+}
+
+static void trace_mem_add(uint32_t inst, uint32_t mem_id, uint64_t gpa, uint64_t size,
+                          uint32_t prot, void *hva)
+{
+    if (!trace_active() || inst >= VMIOP_MAX_INSTANCES) return;
+    pthread_mutex_lock(&g_trace_lock);
+    if (g_trace_fp) {
+        for (uint32_t i = 0; i < TRACE_MAX_MEMS; i++) {
+            if (!g_trace_mems[inst][i].in_use) {
+                g_trace_mems[inst][i].in_use = 1;
+                g_trace_mems[inst][i].mem_id = mem_id;
+                g_trace_mems[inst][i].gpa    = gpa;
+                g_trace_mems[inst][i].size   = size;
+                g_trace_mems[inst][i].hva    = hva;
+                break;
+            }
+        }
+        fprintf(g_trace_fp,
+                "{\"ts\":%llu,\"ev\":\"mem_map\",\"inst\":%u,\"id\":\"0x%x\","
+                "\"gpa\":\"0x%llx\",\"size\":\"0x%llx\",\"prot\":%u}\n",
+                (unsigned long long)trace_mono_ns(), inst, mem_id,
+                (unsigned long long)gpa, (unsigned long long)size, prot);
+        fflush(g_trace_fp);
+    }
+    pthread_mutex_unlock(&g_trace_lock);
+}
+
+static void trace_mem_remove(uint32_t inst, uint32_t mem_id)
+{
+    if (!trace_active() || inst >= VMIOP_MAX_INSTANCES) return;
+    pthread_mutex_lock(&g_trace_lock);
+    if (g_trace_fp) {
+        for (uint32_t i = 0; i < TRACE_MAX_MEMS; i++) {
+            if (g_trace_mems[inst][i].in_use && g_trace_mems[inst][i].mem_id == mem_id) {
+                fprintf(g_trace_fp,
+                        "{\"ts\":%llu,\"ev\":\"mem_unmap\",\"inst\":%u,\"id\":\"0x%x\",\"gpa\":\"0x%llx\"}\n",
+                        (unsigned long long)trace_mono_ns(), inst, mem_id,
+                        (unsigned long long)g_trace_mems[inst][i].gpa);
+                fflush(g_trace_fp);
+                memset(&g_trace_mems[inst][i], 0, sizeof(g_trace_mems[inst][i]));
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_trace_lock);
+}
+
+static void trace_scan_vrpc_pages(uint32_t inst, const char *phase)
+{
+    if (!trace_active() || inst >= VMIOP_MAX_INSTANCES) return;
+    pthread_mutex_lock(&g_trace_lock);
+    if (g_trace_fp) {
+        trace_inst_stats_t *st = &g_trace_stats[inst];
+        for (uint32_t i = 0; i < TRACE_MAX_MEMS; i++) {
+            const trace_guest_mem_t *m = &g_trace_mems[inst][i];
+            if (!m->in_use || !m->hva || m->size < 0x20ULL || m->size > 0x200000ULL) continue;
+            uint8_t buf[TRACE_HEX_MAX_BYTES];
+            memset(buf, 0, sizeof(buf));
+            if (trace_safe_read_mem(m->hva, buf, 0x20U) != 0) continue;
+            uint32_t ver, sig, len, fn, res, spare, seq, flags;
+            memcpy(&ver,   buf + 0x00, 4);
+            memcpy(&sig,   buf + 0x04, 4);
+            memcpy(&len,   buf + 0x08, 4);
+            memcpy(&fn,    buf + 0x0c, 4);
+            memcpy(&res,   buf + 0x10, 4);
+            memcpy(&spare, buf + 0x14, 4);
+            memcpy(&seq,   buf + 0x18, 4);
+            memcpy(&flags, buf + 0x1c, 4);
+            if (sig != TRACE_VRPC_MAGIC || len < 0x20U || (uint64_t)len > m->size) continue;
+
+            size_t dump_len = (len < TRACE_HEX_MAX_BYTES) ? (size_t)len : TRACE_HEX_MAX_BYTES;
+            if (dump_len > 0x20U) {
+                if (trace_safe_read_mem(m->hva, buf, dump_len) != 0) dump_len = 0x20U;
+            }
+            char hexbuf[TRACE_HEX_MAX_BYTES * 2U + 1U];
+            trace_bytes_to_hex(buf, dump_len, hexbuf, sizeof(hexbuf));
+
+            if (res == 0xffffffffU) {
+                if (!st->has_req || st->last_req_seq != seq || st->last_req_func != fn) {
+                    st->has_req = 1;
+                    st->last_req_seq = seq;
+                    st->last_req_func = fn;
+                    fprintf(g_trace_fp,
+                            "{\"ts\":%llu,\"ev\":\"vrpc_req\",\"inst\":%u,\"phase\":\"%s\","
+                            "\"gpa\":\"0x%llx\",\"ver\":\"0x%x\",\"func\":\"0x%x\","
+                            "\"len\":%u,\"seq\":%u,\"flags\":\"0x%x\",\"hex\":\"%s\"}\n",
+                            (unsigned long long)trace_mono_ns(), inst, phase ? phase : "",
+                            (unsigned long long)m->gpa, ver, fn, len, seq, flags, hexbuf);
+                    fflush(g_trace_fp);
+                }
+            } else {
+                if (!st->has_rep || st->last_rep_seq != seq ||
+                    st->last_rep_func != fn || st->last_rep_res != res) {
+                    st->has_rep = 1;
+                    st->last_rep_seq = seq;
+                    st->last_rep_func = fn;
+                    st->last_rep_res = res;
+                    fprintf(g_trace_fp,
+                            "{\"ts\":%llu,\"ev\":\"vrpc_rep\",\"inst\":%u,\"phase\":\"%s\","
+                            "\"gpa\":\"0x%llx\",\"ver\":\"0x%x\",\"func\":\"0x%x\","
+                            "\"len\":%u,\"status\":\"0x%x\",\"spare\":\"0x%x\",\"seq\":%u,"
+                            "\"flags\":\"0x%x\",\"hex\":\"%s\"}\n",
+                            (unsigned long long)trace_mono_ns(), inst, phase ? phase : "",
+                            (unsigned long long)m->gpa, ver, fn, len, res, spare, seq, flags, hexbuf);
+                    fflush(g_trace_fp);
+                }
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_trace_lock);
+}
+
+static void trace_close_all_locked(void)
+{
+    if (g_trace_fp) {
+        fprintf(g_trace_fp, "{\"ts\":%llu,\"ev\":\"trace_stop\",\"pid\":%ld}\n",
+                (unsigned long long)trace_mono_ns(), (long)getpid());
+        fflush(g_trace_fp);
+        fclose(g_trace_fp);
+        g_trace_fp = NULL;
+    }
+    memset(g_trace_mems, 0, sizeof(g_trace_mems));
+    memset(g_trace_stats, 0, sizeof(g_trace_stats));
+    g_trace_init_done = 0;
+}
+
 static int do_vfio_ioctl(int fd, unsigned long req, void *params, uint32_t size, NV_STATUS *out_status)
 {
     if (fd < 0) {
@@ -1313,6 +1556,16 @@ uint32_t vmiop_register_emul_device_v2(uint32_t handle_in, void *priv, void *acc
     if (rec->next) rec->next->prev = rec;
     g_emul_devs = rec;
     if (was_locked == 0) vmiope_env_unlock(0);
+    if (trace_active()) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            fprintf(g_trace_fp,
+                    "{\"ts\":%llu,\"ev\":\"reg_emul\",\"inst\":%d,\"dev_h\":%u,\"tag\":\"%s\"}\n",
+                    (unsigned long long)trace_mono_ns(), inst, handle_in, (const char *)tag);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
+    }
     return VMIOP_SUCCESS;
 }
 
@@ -1378,6 +1631,18 @@ uint32_t vmiop_create_guest_region_v2(uint32_t dev_handle, uint64_t length, void
     }
     pthread_mutex_unlock(&b->region_lock);
     if (unlocked) vmiope_env_lock(NULL);
+    if (st == VMIOP_SUCCESS && trace_active()) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            fprintf(g_trace_fp,
+                    "{\"ts\":%llu,\"ev\":\"region_create\",\"inst\":%d,\"id\":\"0x%x\","
+                    "\"space\":%d,\"len\":\"0x%llx\"}\n",
+                    (unsigned long long)trace_mono_ns(), inst, *out_id, space,
+                    (unsigned long long)length);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
+    }
     return st;
 }
 
@@ -1434,6 +1699,17 @@ uint32_t vmiop_relocate_guest_region(uint32_t region_id, uint64_t start)
 
     pthread_mutex_unlock(&b->region_lock);
     if (unlocked) vmiope_env_lock(NULL);
+    if (st == VMIOP_SUCCESS && trace_active()) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            fprintf(g_trace_fp,
+                    "{\"ts\":%llu,\"ev\":\"region_reloc\",\"inst\":%u,\"id\":\"0x%x\",\"start\":\"0x%llx\"}\n",
+                    (unsigned long long)trace_mono_ns(), inst, region_id,
+                    (unsigned long long)start);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
+    }
     return st;
 }
 
@@ -1461,6 +1737,19 @@ uint32_t vmiop_map_guest_region(uint32_t dev_handle_or_id, uint64_t pmmio_start,
                   (unsigned long long)pmmio_start,
                   (unsigned long long)size, st);
         return VMIOP_ERROR_INVAL;
+    }
+    if (trace_active()) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            fprintf(g_trace_fp,
+                    "{\"ts\":%llu,\"ev\":\"region_map\",\"inst\":%u,\"add\":%d,"
+                    "\"vmmio\":\"0x%llx\",\"pmmio\":\"0x%llx\",\"size\":\"0x%llx\"}\n",
+                    (unsigned long long)trace_mono_ns(), inst, add,
+                    (unsigned long long)vmmio_start, (unsigned long long)pmmio_start,
+                    (unsigned long long)size);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
     }
     return VMIOP_SUCCESS;
 }
@@ -1572,6 +1861,9 @@ uint32_t vmiop_map_guest_memory_v2(uint32_t dev_handle, uint64_t gpa, uint64_t s
     *out_id = ((uint32_t)inst << 24) | (slot_id & 0xffffffU);
     *out_hva = hva;
 
+    trace_mem_add((uint32_t)inst, *out_id, gpa, size, prot_flags, hva);
+    trace_scan_vrpc_pages((uint32_t)inst, "mem_map");
+
     vmiop_memory_free_internal(hpfn, pfn_bytes);
     vmiop_memory_free_internal(mem_list, list_sz);
     return VMIOP_SUCCESS;
@@ -1620,6 +1912,9 @@ uint32_t vmiop_unmap_guest_memory(uint32_t mem_id)
     if (unlocked) vmiope_env_lock(NULL);
 
     if (!gpfn) return VMIOP_ERROR_NOT_FOUND;
+
+    trace_scan_vrpc_pages(inst, "mem_unmap");
+    trace_mem_remove(inst, mem_id);
 
     uint32_t slot_id = mem_id & 0xffffffU;
     NV_STATUS rm_st = rm_unmap_memory(b->inst.hClient, b->inst.hDevice, slot_id, hva, 0);
@@ -1700,6 +1995,12 @@ uint32_t vmiop_pin_guest_pages_v2(uint32_t dev_handle, const uint64_t *gpfn,
 
     vmiop_memory_free_internal(in_buf, bytes);
     vmiop_memory_free_internal(out_buf, bytes);
+    if (ret == VMIOP_SUCCESS && trace_active() && (uint32_t)inst < VMIOP_MAX_INSTANCES) {
+        pthread_mutex_lock(&g_trace_lock);
+        g_trace_stats[inst].pin_calls++;
+        g_trace_stats[inst].pin_pages += count;
+        pthread_mutex_unlock(&g_trace_lock);
+    }
     return ret;
 }
 
@@ -2122,6 +2423,12 @@ static uint32_t vmiop_env_inject_msi_cb(uint64_t dev_handle, uint64_t a, uint32_
     NV_STATUS rm_st = NV_OK;
     do_vfio_ioctl(g_bundles[inst].inst.vgpu_fd, NV_VFIO_VGPU_INJECT_INTERRUPT, NULL, 0, &rm_st);
     if (was_locked == 0) vmiope_env_unlock(0);
+    if (trace_active() && (uint32_t)inst < VMIOP_MAX_INSTANCES) {
+        pthread_mutex_lock(&g_trace_lock);
+        g_trace_stats[inst].msi_count++;
+        pthread_mutex_unlock(&g_trace_lock);
+        trace_scan_vrpc_pages((uint32_t)inst, "msi");
+    }
     return VMIOP_SUCCESS;
 }
 
@@ -2201,7 +2508,26 @@ int vmiope_process_configuration(const char *cfg, uint32_t vgpu_type_id,
     }
 
     char lib_name[1024];
-    snprintf(lib_name, sizeof(lib_name), "libnvidia-vgpu");
+    const char *env_plug = getenv("OPEN_VGPU_PLUGIN_LIB");
+    if (env_plug && env_plug[0] != '\0' && strlen(env_plug) < sizeof(lib_name)) {
+        snprintf(lib_name, sizeof(lib_name), "%s", env_plug);
+    } else {
+        snprintf(lib_name, sizeof(lib_name), "libnvidia-vgpu");
+    }
+
+    if (trace_active()) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            fprintf(g_trace_fp, "{\"ts\":%llu,\"ev\":\"plug_load\",\"inst\":%u,\"vgpu_type\":%u,\"lib\":",
+                    (unsigned long long)trace_mono_ns(), inst, vgpu_type_id);
+            trace_json_escaped(g_trace_fp, lib_name);
+            fprintf(g_trace_fp, ",\"bdf\":");
+            trace_json_escaped(g_trace_fp, pci_bdf_str);
+            fputs("}\n", g_trace_fp);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
+    }
 
     if (inst == 0U) {
         const char *num_s = vmiope_lookup_config_raw("numPlugins", inst);
@@ -2374,6 +2700,12 @@ int vmiope_dispatch_emul_space(uint32_t inst, VGPU_EMUL_SPACE_T space,
         return -1;
     }
 
+    uint64_t bar_off = offset & 0xffffffULL;
+    if (space == VGPU_EMUL_MMIO && is_write &&
+        (bar_off == 0x8f050ULL || bar_off == 0x8f0c0ULL)) {
+        trace_scan_vrpc_pages(inst, "doorbell_pre");
+    }
+
     uint32_t rem = width;
     uint64_t off = offset;
     uint32_t pos = 0;
@@ -2398,9 +2730,60 @@ int vmiope_dispatch_emul_space(uint32_t inst, VGPU_EMUL_SPACE_T space,
             if (cb_rc != 0U) val = 0xffffffffU;
             memcpy(data + pos, &val, chunk);
         }
+        if (trace_active()) {
+            pthread_mutex_lock(&g_trace_lock);
+            if (g_trace_fp) {
+                trace_inst_stats_t *ts = &g_trace_stats[inst];
+                if (space == VGPU_EMUL_CONFIG_SPACE) {
+                    ts->pci_cfg_count++;
+                    fprintf(g_trace_fp,
+                            "{\"ts\":%llu,\"ev\":\"pci_cfg\",\"inst\":%u,\"rw\":\"%c\","
+                            "\"off\":\"0x%llx\",\"w\":%u,\"val\":\"0x%x\",\"rc\":%u}\n",
+                            (unsigned long long)trace_mono_ns(), inst, is_write ? 'w' : 'r',
+                            (unsigned long long)off, chunk, val, cb_rc);
+                } else if (space == VGPU_EMUL_MMIO) {
+                    uint64_t chunk_bar_off = off & 0xffffffULL;
+                    int is_8f = (chunk_bar_off >= 0x8f000ULL && chunk_bar_off < 0x90000ULL);
+                    if (is_8f) {
+                        ts->mmio_8f_count++;
+                        if (is_write) {
+                            uint32_t r = (uint32_t)(chunk_bar_off - 0x8f000ULL);
+                            if (r == 0x00U) ts->send_lo = val;
+                            else if (r == 0x04U) ts->send_hi = val;
+                            else if (r == 0x10U) ts->recv_lo = val;
+                            else if (r == 0x14U) ts->recv_hi = val;
+                            else if (r == 0x30U) ts->ev_lo = val;
+                            else if (r == 0x34U) ts->ev_hi = val;
+                            else if (r == 0xb0U) ts->uvm_send_lo = val;
+                            else if (r == 0xb4U) ts->uvm_send_hi = val;
+                        }
+                        fprintf(g_trace_fp,
+                                "{\"ts\":%llu,\"ev\":\"mmio\",\"inst\":%u,\"rw\":\"%c\","
+                                "\"off\":\"0x%llx\",\"bar_off\":\"0x%llx\",\"w\":%u,\"val\":\"0x%x\",\"rc\":%u}\n",
+                                (unsigned long long)trace_mono_ns(), inst, is_write ? 'w' : 'r',
+                                (unsigned long long)off, (unsigned long long)chunk_bar_off, chunk, val, cb_rc);
+                    } else if (ts->mmio_non8f_logged < TRACE_MMIO_CAP) {
+                        ts->mmio_non8f_logged++;
+                        fprintf(g_trace_fp,
+                                "{\"ts\":%llu,\"ev\":\"mmio\",\"inst\":%u,\"rw\":\"%c\","
+                                "\"off\":\"0x%llx\",\"bar_off\":\"0x%llx\",\"w\":%u,\"val\":\"0x%x\",\"rc\":%u}\n",
+                                (unsigned long long)trace_mono_ns(), inst, is_write ? 'w' : 'r',
+                                (unsigned long long)off, (unsigned long long)chunk_bar_off, chunk, val, cb_rc);
+                    } else {
+                        ts->mmio_non8f_suppressed++;
+                    }
+                }
+            }
+            pthread_mutex_unlock(&g_trace_lock);
+        }
         off += chunk;
         pos += chunk;
         rem -= chunk;
+    }
+
+    if (space == VGPU_EMUL_MMIO && is_write &&
+        (bar_off == 0x8f050ULL || bar_off == 0x8f0c0ULL || bar_off == 0x8f054ULL)) {
+        trace_scan_vrpc_pages(inst, (bar_off == 0x8f054ULL) ? "msg_ctl" : "doorbell_post");
     }
     return 0;
 }
@@ -2626,6 +3009,27 @@ void vmiope_cleanup_instance(uint32_t inst)
         munmap(b->inst.console.buffer, NV_VFIO_VGPU_CONSOLE_SURFACE_SIZE_MAX - 1U);
         b->inst.console.buffer = NULL;
     }
+    if (b->inst.active) {
+        pthread_mutex_lock(&g_trace_lock);
+        if (g_trace_fp) {
+            const trace_inst_stats_t *ts = &g_trace_stats[inst];
+            fprintf(g_trace_fp,
+                    "{\"ts\":%llu,\"ev\":\"inst_summary\",\"inst\":%u,"
+                    "\"pin_calls\":%llu,\"pin_pages\":%llu,\"msi_count\":%llu,"
+                    "\"pci_cfg_count\":%llu,\"mmio_8f_count\":%llu,"
+                    "\"mmio_non8f_logged\":%llu,\"mmio_non8f_suppressed\":%llu}\n",
+                    (unsigned long long)trace_mono_ns(), inst,
+                    (unsigned long long)ts->pin_calls,
+                    (unsigned long long)ts->pin_pages,
+                    (unsigned long long)ts->msi_count,
+                    (unsigned long long)ts->pci_cfg_count,
+                    (unsigned long long)ts->mmio_8f_count,
+                    (unsigned long long)ts->mmio_non8f_logged,
+                    (unsigned long long)ts->mmio_non8f_suppressed);
+            fflush(g_trace_fp);
+        }
+        pthread_mutex_unlock(&g_trace_lock);
+    }
     b->inst.active = 0;
 }
 
@@ -2666,4 +3070,7 @@ void vmiope_reset_all(void)
     g_instance_count = 0;
     g_log_hook = NULL;
     g_vfio_ioctl = default_vfio_ioctl;
+    pthread_mutex_lock(&g_trace_lock);
+    trace_close_all_locked();
+    pthread_mutex_unlock(&g_trace_lock);
 }

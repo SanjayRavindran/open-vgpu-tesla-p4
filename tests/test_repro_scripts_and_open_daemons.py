@@ -41,6 +41,9 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             "libnvidia-ml.so.535.309.01.exports.json",
             "libnvidia-ml.so.535.309.01.exposure.json",
             "libnvidia-ml.so.535.309.01.layout.json",
+            "libnvidia-vgpu.so.535.309.01.exports.json",
+            "libnvidia-vgpu.so.535.309.01.exposure.json",
+            "libnvidia-vgpu.so.535.309.01.layout.json",
         ]
         for fn in expected:
             p = ev_dir / fn
@@ -72,6 +75,14 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-nvml-smi" / "open_nvidia_smi.c",
             ROOT / "open-nvml-smi" / "test_nvml_smi_unit.c",
             ROOT / "open-nvml-smi" / "Makefile",
+            ROOT / "open-vgpu-plugin" / "open_vgpu_plugin.h",
+            ROOT / "open-vgpu-plugin" / "gp104_vgpu_core.c",
+            ROOT / "open-vgpu-plugin" / "open_vgpu_plugin.c",
+            ROOT / "open-vgpu-plugin" / "mock_vendor_vgpu.c",
+            ROOT / "open-vgpu-plugin" / "test_vgpu_plugin_unit.c",
+            ROOT / "open-vgpu-plugin" / "vmiop_plugin.map",
+            ROOT / "open-vgpu-plugin" / "Makefile",
+            ROOT / "docs" / "12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
             ROOT / "nova-vgpu" / "src" / "bin" / "open_nvidia_vgpud.rs",
         ]

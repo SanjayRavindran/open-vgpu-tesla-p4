@@ -18,8 +18,8 @@ To maximize open-source transparency without destabilizing live VM GPU virtualiz
 | **`open-nvidia-vgpu-mgr`** | **Replaced (Open)** | C (`open-vgpu-mgr`) | Full KVM/VFIO `vmiop-env` runtime daemon: binds `/dev/nvidia-vgpuctl` & `/dev/nvidia-vgpu%d`, forks per-VM `vgpu` worker processes, manages `/dev/nvidiactl` RM client (`NV_ESC_IOCTL_XFER_CMD`, `NV01_MEMORY_LIST_SYSTEM`), and exports all `60` dynamic `vmiop_*` symbols + `vmiop_presentation` to `libnvidia-vgpu.so` |
 | **`open-nvidia-smi`** & **`libopen-nvidia-ml.so`** | **Replaced (Open)** | C (`open-nvml-smi`) | Clean-room NVML (`libnvidia-ml.so.1` SONAME) & `nvidia-smi` CLI: queries `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*` + `0xa081*`) for GP104 temperature, power, clocks, FB/BAR1 memory, active `vgpu` processes, and supported/creatable/active vGPU instances |
 | **`nvidia-vgpu-vfio.ko`** | **Open (DKMS)** | C / MIT (`535.309.01`) | Packaged alongside `nvidia.ko` in `/usr/src/nvidia-vgpu-kvm-535.309.01` for automatic rebuilds across Ubuntu & Proxmox kernels |
+| **`libopen-nvidia-vgpu.so`** (`open-vgpu-plugin`) | **Replaced (Phase 1A: Standalone GP104 + Hybrid Interposer)** | C (`open-vgpu-plugin`) | Implements `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8`B) & `vmiop_display_vmiop_env@@VER_2_0` (`0x38`B), clean-room GP104 PCI/BAR0/VRPC/VMMU/CHIDMGR core (`gp104_vgpu_core.c`), plus live hybrid interposition/tracing alongside `libnvidia-vgpu.so.535.309.01` |
 | **`nvidia.ko`** (`nv-kernel.o_binary`) | Retained (Stable) | Proprietary kernel core | Handles Pascal Falcon signed blobs (`ACR`, `PMU`, `SEC2`, `FECS`) and RM IOCTL dispatch |
-| **`libnvidia-vgpu.so.535.309.01`** | Retained (Stable) | Proprietary `vmiop` plugin | Loaded dynamically by `open-nvidia-vgpu-mgr` (`vmiop_display_vmiop_plugin@@VER_5_0`) for 50/50 multi-VM BAR0/VRPC mediation |
 
 ---
 
@@ -29,7 +29,7 @@ Static decompilation of `nvidia-vgpud` (`0x401e20`, `0x4020a0`, `0x402ca0`, `0x4
 
 1. **Synchronous Oneshot Design**: `main` calls `0x402ca0` once to register profiles in kernel RM and immediately exits `0`; systemd runs `open-nvidia-vgpud` as `Type=oneshot` with `RemainAfterExit=yes`.
 2. **Exact `/dev/nvidiactl` & `/dev/nvidiaN` Sequence** (implemented in [`nova-vgpu/src/rm_ioctl.rs`](../nova-vgpu/src/rm_ioctl.rs) and verified live on `535.309.01`):
-   - `NV_ESC_CHECK_VERSION_STR` (`0xc04846d2`, `cmd=0`) with the running kernel version parsed from `/proc/driver/nvidia/version` (`535.309.01`)
+   - `NV_ESC_CHECK_VERSION_STR` (`0xc04846d2`, `cmd=0`) with the running kernel version parsed from `/proc/driver/nvidia/version` (`535.309.01`), after `ensure_nvidia_char_node()` guarantees `/dev/nvidiactl` (`195:255`) and `/dev/nvidia0` (`195:0`) exist on cold boot via `/proc/devices` + `mknod` (covered by unit test `test_parse_chardev_major_and_makedev`)
    - `NV_ESC_CARD_INFO` (`0xc90046c8`, `32 * 0x48` bytes) mapping `gpu_id -> minor`
    - `NV_ESC_RM_ALLOC_V0` (`0xc020462b`, `32` bytes) allocating root `h_client`
    - `NV0000_CTRL_CMD_GPU_GET_PROBED_IDS` (`0x214`) -> `GET_PCI_INFO` (`0x21b`) -> `ATTACH_IDS` (`0x215`)
@@ -84,7 +84,7 @@ Implemented in [`open-vgpu-mgr/`](../open-vgpu-mgr/) (`nv_vgpu_vfio_abi.h`, `rm_
    - Maps pinned guest PFNs via `NV01_MEMORY_LIST_SYSTEM` (`0x81`, `0x80`-byte header + PFN array) and tracks both `mmap64` user VAs and kernel `mp.pLinearAddress` handles so `NV_ESC_RM_UNMAP_MEMORY` (`0x4f`) unmaps cleanly on `fdType == 1` (`/dev/nvidiactl`) and `fdType == 2` (`/dev/nvidiaN`).
 3. **Full `vmiop_*` Runtime ABI (`60` Original Exports Matched)**:
    - Exports all `60` `vmiop_*` symbols (`diff -u` zero differences against NVIDIA's `nvidia-vgpu-mgr`), dynamically loads `libnvidia-vgpu.so` (`vmiop_display_vmiop_plugin@@VER_5_0` and `vmiop_display_vmiop_env@@VER_2_0`), and provides the built-in `vmiop_presentation` VNC/console plugin (`0x68` bytes, `version=0x20000`, `class=9`).
-   - Unprivileged unit test suite (`make -C open-vgpu-mgr clean all test`) validates all 5 test suites (`test_abi_and_error_table`, `test_memory_buffers_and_conversion`, `test_sync_and_threads`, `test_config_plugins_and_presentation`, `test_emul_regions_pin_map_and_rm`) with `-Wall -Wextra -Werror`.
+   - Unprivileged unit test suite (`make -C open-vgpu-mgr clean all test`) validates all 6 test suites (`test_abi_and_error_table`, `test_memory_buffers_and_conversion`, `test_sync_and_threads`, `test_config_plugins_and_presentation`, `test_emul_regions_pin_map_and_rm`, `test_trace_tap_and_vrpc_capture`) with `-Wall -Wextra -Werror`. Supports zero-overhead runtime `OPEN_VGPU_PLUGIN_LIB` selection and `OPEN_VGPU_TRACE_DIR` JSONL capture (using `msync(..., MS_ASYNC)` + direct `memcpy`, avoiding `/proc/self/mem` `nvidia_vma_access` faults).
 
 ---
 
@@ -98,3 +98,12 @@ With `nvidia-vgpu-kvm/535.309.01` installed under DKMS (`updates/dkms/nvidia.ko.
    - `vm-alma`: `GRID P4-4Q` (`535.309.01`, `Licensed`), pure Wayland `--no-x11 --headless`, `[HWAccel.CUDA] Initialization of CUDA was successful` in `gnome-remote-desktop-daemon`, `GSK_RENDERER=ngl`, `selkies-webtop` healthy, and FreeRDP `:3389` desktop verified via screenshot.
    - `vm-win11`: `GRID P4-4Q` (`539.72`, `Licensed`), `Get-PnpDevice` status `OK`, WinRM NTLM active, and FreeRDP `:3389` NLA login (`zero`) verified via screenshot without error `0x200d`.
    - Both VMs were gracefully shut down afterward cleanly returning the Tesla P4 to idle (`0` QEMU processes).
+
+---
+
+## 7. `libopen-nvidia-vgpu.so` (C, Phase 1A) & Live 2-VM VRPC Trace (`2026-11-22`)
+
+Implemented in [`open-vgpu-plugin/`](../open-vgpu-plugin/) (`open_vgpu_plugin.h`, `gp104_vgpu_core.c`, `open_vgpu_plugin.c`, `vmiop_plugin.map`, `mock_vendor_vgpu.c`, `test_vgpu_plugin_unit.c`, `Makefile`) and cataloged in [`12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md`](./12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md):
+- Exports `vmiop_display_vmiop_plugin@@VER_5_0` (`0xa8` bytes) and `vmiop_display_vmiop_env@@VER_2_0` (`0x38` bytes), verified by `make -C open-vgpu-plugin clean all test` (`test_standalone_gp104_end_to_end` + `test_hybrid_interposer_and_trace`).
+- Cold-boot `/dev/nvidiactl` fix verified across a real power cycle on `192.168.1.24`.
+- Deployed alongside `open-nvidia-vgpu-mgr` in hybrid interposer mode on `192.168.1.24`: concurrently booted `vm-alma` (`PID 3149`, `535.309.01`, `Licensed`) and `vm-win11` (`PID 3202`, `539.72`, `Licensed`), capturing `34` Linux VRPC opcodes (`2,764` calls) and `39` Windows VRPC opcodes (`7,430` calls) — `47` distinct opcodes total — plus live PCI config (`0x030000a1`, vendor cap `535.309.01r539_72`) and BAR0 `0x8f000` constants fed back into `gp104_vgpu_core.c`.
