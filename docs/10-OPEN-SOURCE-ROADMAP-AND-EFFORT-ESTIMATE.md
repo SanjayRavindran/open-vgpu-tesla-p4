@@ -56,9 +56,10 @@ Measured directly on `192.168.1.15` against the remaining closed `535.309.01-vgp
 
 ## 3. AI-Agent Accelerated Phasing for Remaining Components
 
-1. **Phase 1A *(COMPLETE)* & Phase 1B — Open Host `vmiop` Mediator (`libopen-nvidia-vgpu.so` / `nova-vgpu`)**
+1. **Phase 1A *(COMPLETE)* & Phase 1B *(Milestone 1B-1 Complete / 1B-2 Remaining)* — Open Host `vmiop` Mediator (`libopen-nvidia-vgpu.so` / `nova-vgpu`)**
    - **Phase 1A *(Done)*:** Delivered `open-vgpu-plugin/` (`libopen-nvidia-vgpu.so` `VER_5_0`/`VER_2_0` standalone GP104 core + hybrid interposer), `open-vgpu-mgr` live trace tap (`msync`-safe), cold-boot `/dev/nvidiactl` fix, `rea@6.10.1` exports/layout/exposure evidence, and complete live 2-VM VRPC/BAR0/PCI catalog (`47` opcodes in [`12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md`](./12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md)).
-   - **Phase 1B *(Est. 2–3 sessions)*:** Flesh out RM-backed handlers in `gp104_vgpu_core.c` for all `47` cataloged VRPC opcodes (`0x02..0x9c`, `NVA082`, GP104 `VMMU`, `CHIDMGR`) to boot VMs in standalone non-vendor mode (keeping vendor DLS licensing excluded per policy).
+   - **Milestone 1B-1 *(Done)*:** Added host RM `NVA081`/`NVA082` bridge (`open_vgpu_rm.c`), guest-to-host client mapping, and `32` RM-backed VRPC handlers (`open_vrpc_rm.c`), verified via mock-RM unit tests and `--live-rm-probe` on `192.168.1.24` (`GRID P4-4Q`, `virt_mode=3`, `fb=0xec000000`).
+   - **Milestone 1B-2 *(Est. 1–2 sessions remaining)*:** Implement the remaining `15` memory/MMU/channel/PTE-blit VRPCs (`0x04`..`0x0f`, `0x1b`, `0x1c`, `0x21`, `0x2b`, `0x34`, `0x38`, `0x3d`) plus `vmiop_map_guest_region` BAR1/USERD forwarding for standalone 2-VM boot (keeping vendor DLS licensing excluded per policy).
 2. **Phase 2 — Open Guest vGPU Kernel Driver (`Guest nv-kernel.o_binary` -> `open-gpu-kernel-modules` vGPU Client) *(Est. 2–4 sessions)* **
    - **Workflow**: Adapt NVIDIA's open `535.309.01` kernel RM (`src/nvidia/`) so its `vgpu_rpc` transport talks over the guest's BAR0 `0x8f000` shared page instead of GSP-RM, verified live on `vm-alma` (`192.168.1.68`).
    - **Outcome**: 100% open-source Linux guest kernel modules (`nvidia.ko`, `nvidia-modeset.ko`, `nvidia-drm.ko`) with zero `.o_binary` blobs inside the AlmaLinux guest.

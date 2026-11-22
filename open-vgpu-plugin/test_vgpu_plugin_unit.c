@@ -342,11 +342,380 @@ static void test_hybrid_interposer_and_trace(void)
     printf("  [PASS] test_hybrid_interposer_and_trace\n");
 }
 
-int main(void)
+/* -------------------------------------------------------------------------
+ * Mock Host RM Bridge Tests (/dev/nvidiactl + /dev/nvidia0 + NVA081/NVA082)
+ * ------------------------------------------------------------------------- */
+static struct {
+    int open_fds;
+    int saw_ver_check;
+    int saw_card_info;
+    int saw_reg_fd;
+    int saw_nva081;
+    int saw_nva082;
+    int saw_xfer;
+    uint32_t next_host_client;
+    uint32_t last_ctrl_cmd;
+    uint32_t last_lic_state;
+    uint64_t last_fb_usage;
+    uint32_t ctrl_calls;
+    uint32_t free_calls;
+    uint32_t dup_calls;
+} g_mock_rm;
+
+static int mock_rm_open(const char *path, int flags)
 {
+    (void)flags;
+    if (strcmp(path, "/dev/nvidiactl") == 0) {
+        g_mock_rm.open_fds++;
+        return 100;
+    }
+    if (strcmp(path, "/dev/nvidia0") == 0) {
+        g_mock_rm.open_fds++;
+        return 101;
+    }
+    return -1;
+}
+
+static int mock_rm_close(int fd)
+{
+    if (fd == 100 || fd == 101) {
+        g_mock_rm.open_fds--;
+    }
+    return 0;
+}
+
+static int mock_rm_ioctl(int fd, unsigned long req, void *arg)
+{
+    (void)fd;
+    uint32_t nr = (uint32_t)_IOC_NR(req);
+    if (nr == NV_ESC_CHECK_VERSION_STR) {
+        g_mock_rm.saw_ver_check++;
+        return 0;
+    }
+    if (nr == NV_ESC_CARD_INFO) {
+        nv_ioctl_card_info_t *cards = (nv_ioctl_card_info_t *)arg;
+        g_mock_rm.saw_card_info++;
+        cards[0].valid        = 1U;
+        cards[0].domain       = 0U;
+        cards[0].bus          = 1U;
+        cards[0].slot         = 0U;
+        cards[0].function     = 0U;
+        cards[0].vendor_id    = 0x10deU;
+        cards[0].device_id    = 0x1bb3U;
+        cards[0].gpu_id       = 0x100U;
+        cards[0].minor_number = 0U;
+        return 0;
+    }
+    if (nr == NV_ESC_REGISTER_FD) {
+        g_mock_rm.saw_reg_fd++;
+        return 0;
+    }
+    if (nr == NV_ESC_IOCTL_XFER_CMD) {
+        nv_ioctl_xfer_t *x = (nv_ioctl_xfer_t *)arg;
+        g_mock_rm.saw_xfer++;
+        (void)x;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_ALLOC) {
+        uint32_t sz = (uint32_t)_IOC_SIZE(req);
+        if (sz == sizeof(NVOS21_ROOT_PARAMETERS)) {
+            NVOS21_ROOT_PARAMETERS *p = (NVOS21_ROOT_PARAMETERS *)arg;
+            p->hObjectNew = g_mock_rm.next_host_client++;
+            p->status     = NV_OK;
+            return 0;
+        }
+        NVOS64_PARAMETERS *p = (NVOS64_PARAMETERS *)arg;
+        if (p->hClass == NVA081_VGPU_CONFIG) g_mock_rm.saw_nva081++;
+        if (p->hClass == NVA082_HOST_VGPU_DEVICE) {
+            assert(p->paramsSize == 0x70U);
+            NVA082_ALLOC_PARAMETERS *ap = (NVA082_ALLOC_PARAMETERS *)(uintptr_t)p->pAllocParms;
+            assert(ap->vgpuType == 65U);
+            assert(ap->vmIdType == 1U);
+            g_mock_rm.saw_nva082++;
+        }
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_FREE) {
+        NVOS00_PARAMETERS *p = (NVOS00_PARAMETERS *)arg;
+        g_mock_rm.free_calls++;
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_DUP_OBJECT) {
+        NVOS55_DUP_PARAMETERS *p = (NVOS55_DUP_PARAMETERS *)arg;
+        g_mock_rm.dup_calls++;
+        p->status = NV_OK;
+        return 0;
+    }
+    if (nr == NV_ESC_RM_CONTROL) {
+        NVOS54_PARAMETERS *p = (NVOS54_PARAMETERS *)arg;
+        void *prm = (void *)(uintptr_t)p->params;
+        g_mock_rm.ctrl_calls++;
+        g_mock_rm.last_ctrl_cmd = p->cmd;
+        if (p->cmd == NV0000_CTRL_CMD_GPU_GET_ID_INFO) {
+            NV0000_CTRL_GPU_GET_ID_INFO_PARAMS *id = (NV0000_CTRL_GPU_GET_ID_INFO_PARAMS *)prm;
+            id->deviceInstance = 0U;
+        } else if (p->cmd == NV2080_CTRL_CMD_BUS_GET_PCI_INFO) {
+            uint32_t *ids = (uint32_t *)prm;
+            ids[0] = 0x1bb310deU;
+            ids[1] = 0x11d810deU;
+        } else if (p->cmd == NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE) {
+            *(uint32_t *)prm = 3U; /* HOST_VGPU */
+        } else if (p->cmd == NVA081_CTRL_CMD_VGPU_CONFIG_GET_VGPU_TYPE_INFO) {
+            NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS *ti =
+                (NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS *)prm;
+            snprintf(ti->vgpuName, sizeof(ti->vgpuName), "GRID P4-4Q");
+            ti->fbLength  = 0x100000000ULL;
+            ti->frlConfig = 60U;
+            uint64_t usable = 0xec000000ULL;
+            memcpy(&ti->tail[0], &usable, sizeof(usable));
+        } else if (p->cmd == NVA082_CTRL_CMD_GET_P2P_CAP) {
+            *(uint8_t *)prm = 1U;
+        } else if (p->cmd == NVA082_CTRL_CMD_GET_ENCODER_CAPACITY) {
+            *(uint32_t *)prm = 85U;
+        } else if (p->cmd == NVA082_CTRL_CMD_SET_LICENSE_STATE) {
+            g_mock_rm.last_lic_state = *(const uint8_t *)prm;
+        } else if (p->cmd == NVA082_CTRL_CMD_SET_FB_USAGE) {
+            g_mock_rm.last_fb_usage = *(const uint64_t *)prm;
+        }
+        p->status = NV_OK;
+        return 0;
+    }
+    return -1;
+}
+
+static void init_vrpc(uint8_t *buf, uint32_t fn, uint32_t tot)
+{
+    memset(buf, 0, tot);
+    w32(buf, 0x00, OPEN_VRPC_HEADER_VERSION);
+    w32(buf, 0x04, OPEN_VRPC_SIGNATURE);
+    w32(buf, 0x08, tot);
+    w32(buf, 0x0c, fn);
+    w32(buf, 0x10, OPEN_VRPC_PENDING);
+}
+
+static void test_rm_backed_vrpc_and_nva082_lifecycle(void)
+{
+    memset(&g_mock_rm, 0, sizeof(g_mock_rm));
+    g_mock_rm.next_host_client = 0xc1d01000U;
+    open_vgpu_rm_sys_ops_t ops = {
+        .open_fn = mock_rm_open, .close_fn = mock_rm_close, .ioctl_fn = mock_rm_ioctl
+    };
+    open_vgpu_rm_set_sys_ops(&ops);
+
+    gp104_vgpu_dev_t dev;
+    gp104_dev_init_defaults(&dev, 1U, 65U);
+    snprintf(dev.gpu_pci_bdf, sizeof(dev.gpu_pci_bdf), "0000:01:00.0");
+    dev.vgpu_uuid[0] = 0x11U;
+
+    vmiop_env_v2_t env;
+    bind_env(&env);
+    assert(gp104_dev_start(&dev, &env) == VMIOP_SUCCESS);
+    assert(dev.rm.attached == 1 && dev.rm.nva082_allocated == 1);
+    assert(g_mock_rm.saw_ver_check == 1 && g_mock_rm.saw_card_info == 1 && g_mock_rm.saw_reg_fd == 1);
+    assert(g_mock_rm.saw_nva081 == 1 && g_mock_rm.saw_nva082 == 1);
+    assert(dev.rm.virt_mode == 3U && dev.rm.encoder_capacity == 85U);
+    assert(strcmp(dev.rm.live_profile_name, "GRID P4-4Q") == 0);
+
+    /* Exercise xfer (>0x1000) path cleanly */
+    uint8_t dummy_big[0x1200];
+    memset(dummy_big, 0, sizeof(dummy_big));
+    assert(open_vgpu_rm_ctl_ioctl(dev.rm.ctl_fd, 0x99U, sizeof(dummy_big), 0UL, dummy_big) == 0);
+    assert(g_mock_rm.saw_xfer == 1);
+
+    static uint8_t vbuf[8192];
+
+    /* 0x01 SET_GUEST_SYSTEM_INFO + 0x40 branch string -> 0xa0820103 */
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_SYSTEM_INFO, 824U);
+    w32(vbuf, 0x20, 0x23U);
+    w32(vbuf, 0x24, 0x05U);
+    w32(vbuf, 0x28, 0x01U);
+    snprintf((char *)(vbuf + 0x34), 32U, "535.309.01");
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_BRANCH_VER, 296U);
+    snprintf((char *)(vbuf + 0x20), 32U, "r539_72");
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NVA082_CTRL_CMD_SET_GUEST_INFO);
+
+    /* 0x39 SET_LICENSE_STATE: invalid expiry rejected; valid state forwarded unchanged */
+    init_vrpc(vbuf, VRPC_FN_SET_LICENSE_STATE, 52U);
+    vbuf[0x20] = 4U;
+    vbuf[0x30] = 99U;
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+    vbuf[0x30] = 1U;
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NVA082_CTRL_CMD_SET_LICENSE_STATE);
+    assert(g_mock_rm.last_lic_state == 4U);
+
+    /* 0x3e GET_ENCODER_CAPACITY, 0x3f PF_REG_READ32, 0x55 SET_FB_USAGE, 0x50/0x9c */
+    init_vrpc(vbuf, VRPC_FN_GET_ENCODER_CAPACITY, 44U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(r32(vbuf, 0x28) == 85U);
+
+    init_vrpc(vbuf, VRPC_FN_VGPU_PF_REG_READ32, 48U);
+    w32(vbuf, 0x20, 0x00000000U); /* NV_PMC_BOOT_0 */
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(r32(vbuf, 0x28) == 0x134000a1U);
+
+    init_vrpc(vbuf, VRPC_FN_GET_STATIC_INFO, 40U);
+    uint64_t used_fb = 0x12340000ULL;
+    memcpy(vbuf + 0x20, &used_fb, sizeof(used_fb));
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_fb_usage == used_fb);
+
+    init_vrpc(vbuf, VRPC_FN_BATCH_50, 2560U);
+    w32(vbuf, 0x20, 0U);
+    w32(vbuf, 0x24, 128U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(strcmp((char *)(vbuf + 0x68), "GRID P4-4Q") == 0);
+
+    init_vrpc(vbuf, VRPC_FN_SYNC_9C, 3184U);
+    w32(vbuf, 0x20, 0U);
+    w32(vbuf, 0x24, 64U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(r32(vbuf, 0x28) == 0x134000a1U);
+
+    /* 0x02 ALLOC_ROOT (clash + ok), 0x20 ALLOC_DEV, 0x13 ALLOC_SUBDEV */
+    init_vrpc(vbuf, VRPC_FN_ALLOC_ROOT, 140U);
+    w32(vbuf, 0x20, 0x01ff0001U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == 0xff100007U);
+
+    uint32_t g_client = 0xc1d00005U, g_dev = 0xaa000001U, g_sub = 0xaa000002U;
+    w32(vbuf, 0x20, g_client);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.last_ctrl_cmd == NV0000_CTRL_CMD_CLIENT_DISABLE_USERD_ISOL);
+
+    init_vrpc(vbuf, VRPC_FN_SET_GUEST_FB_INFO, 96U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, NV01_DEVICE_0);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_SET_OBJECT, 72U);
+    w32(vbuf, 0x20, 0U);
+    w32(vbuf, 0x28, g_client);
+    w32(vbuf, 0x2c, g_dev);
+    w32(vbuf, 0x30, g_sub);
+    w32(vbuf, 0x34, NV20_SUBDEVICE_0);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    /* 0x5b..0x8f RM controls + 0x1a inline RM_API_CONTROL + 0x15 DUP + 0x0a FREE */
+    struct { uint32_t fn; uint32_t tot; uint32_t cmd; } rm_cases[] = {
+        { VRPC_FN_GR_CTXSW_ZCULL,  1584U, NV2080_CTRL_CMD_GR_CTXSW_ZCULL },
+        { VRPC_FN_FB_GET_INFO_200A,  48U, NV2080_CTRL_CMD_FB_0x200A },
+        { VRPC_FN_TSG_CTRL,          48U, NVA06C_CTRL_CMD_TSG_0x0103 },
+        { VRPC_FN_SM_DEBUG_CTRL,     44U, NV83DE_CTRL_CMD_DEBUG_0x0309 },
+        { VRPC_FN_GR_GFXP_PREEMPT,  144U, NV2080_CTRL_CMD_GR_GFXP_PREEMPT },
+        { VRPC_FN_GR_CTRL_1210,      72U, NV2080_CTRL_CMD_GR_GET_0x1210 },
+        { VRPC_FN_GR_CTRL_1208,      64U, NV2080_CTRL_CMD_GR_GET_0x1208 },
+        { VRPC_FN_DEV_CTRL_1812,     44U, NV0080_CTRL_CMD_FB_0x1812 },
+        { VRPC_FN_PERF_CTRL_2A02,    48U, NV2080_CTRL_CMD_PERF_0x2A02 },
+        { VRPC_FN_ZBC_CTRL_0107,     96U, NV9096_CTRL_CMD_SET_ZBC_0x0107 },
+        { VRPC_FN_PERF_CTRL_3002,  3120U, NV2080_CTRL_CMD_PERF_0x3002 },
+        { VRPC_FN_SYS_CTRL_0127,    196U, NV0000_CTRL_CMD_SYSTEM_GET_P2P_CAPS_V2 },
+        { VRPC_FN_SYS_CTRL_013A,   1392U, NV0000_CTRL_CMD_SYSTEM_GET_P2P_CAPS_MATRIX },
+        { VRPC_FN_DEV_CTRL_170F,     56U, NV0080_CTRL_CMD_DMA_0x170F },
+    };
+    for (size_t i = 0; i < sizeof(rm_cases) / sizeof(rm_cases[0]); i++) {
+        init_vrpc(vbuf, rm_cases[i].fn, rm_cases[i].tot);
+        w32(vbuf, 0x20, g_client);
+        w32(vbuf, 0x24, g_sub);
+        assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+        assert(g_mock_rm.last_ctrl_cmd == rm_cases[i].cmd);
+    }
+
+    init_vrpc(vbuf, VRPC_FN_GPFIFO_SCHEDULE, 48U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_sub);
+    w32(vbuf, 0x28, 0xdeadbeefU);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_ERR_INVALID_ARGUMENT);
+    w32(vbuf, 0x28, NVA06F_CTRL_CMD_GPFIFO_SCHEDULE);
+    vbuf[0x2c] = 1U;
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    init_vrpc(vbuf, VRPC_FN_FB_GET_INFO_8E, 64U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_sub);
+    w32(vbuf, 0x28, 1U);
+    w32(vbuf, 0x30, 1U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(r32(vbuf, 0x34) == (uint32_t)(0xec000000ULL >> 10));
+
+    init_vrpc(vbuf, VRPC_FN_RM_API_CONTROL, 64U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_sub);
+    w32(vbuf, 0x28, NV2080_CTRL_CMD_BUS_GET_PCI_INFO);
+    w32(vbuf, 0x38, 16U);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(r32(vbuf, 0x40) == 0x1bb310deU);
+
+    init_vrpc(vbuf, VRPC_FN_DUP_OBJECT_535, 60U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_dev);
+    w32(vbuf, 0x28, 0xbb000001U);
+    w32(vbuf, 0x2c, g_client);
+    w32(vbuf, 0x30, g_sub);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+    assert(g_mock_rm.dup_calls == 1);
+
+    init_vrpc(vbuf, VRPC_FN_FREE_535, 48U);
+    w32(vbuf, 0x20, g_client);
+    w32(vbuf, 0x24, g_client);
+    w32(vbuf, 0x28, g_client);
+    assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
+
+    gp104_dev_shutdown(&dev);
+    open_vgpu_rm_reset_sys_ops();
+    assert(g_mock_rm.open_fds == 0);
+    assert(g_mock_rm.free_calls >= 5);
+    printf("  [PASS] test_rm_backed_vrpc_and_nva082_lifecycle\n");
+}
+
+static int run_live_rm_probe(void)
+{
+    open_vgpu_rm_reset_sys_ops();
+    open_vgpu_rm_ctx_t rm;
+    memset(&rm, 0, sizeof(rm));
+    rm.ctl_fd = -1;
+    rm.gpu_fd = -1;
+    uint8_t uuid[16] = { 0x11,0x11,0x11,0x11, 0,0, 0,0, 0,0, 0,0,0,0,0,0xfe };
+    NV_STATUS st = open_vgpu_rm_attach(&rm, 9U, 65U, "0000:01:00.0", uuid, (uint32_t)getpid());
+    if (st != NV_OK || !rm.attached) {
+        fprintf(stderr, "live-rm-probe: open_vgpu_rm_attach failed status=0x%x\n", st);
+        open_vgpu_rm_detach(&rm);
+        return 1;
+    }
+
+    uint8_t p2p_v2[0xa8];
+    memset(p2p_v2, 0, sizeof(p2p_v2));
+    NV_STATUS p2p_st = open_vgpu_rm_control(rm.ctl_fd, rm.h_root, rm.h_root,
+                                            NV0000_CTRL_CMD_SYSTEM_GET_P2P_CAPS_V2,
+                                            p2p_v2, sizeof(p2p_v2));
+    printf("LIVE_RM_PROBE: pci=%04x:%04x subsys=%04x:%04x virt_mode=%u profile=\"%s\" fb=0x%llx bar1=0x%llx frl=%u nva082=%d(0x%x) p2p_v2_st=0x%x\n",
+           rm.pci_vendor, rm.pci_device, rm.pci_subsys_vendor, rm.pci_subsys_device,
+           rm.virt_mode, rm.live_profile_name, (unsigned long long)rm.live_fb_length,
+           (unsigned long long)rm.live_bar1_length, rm.live_frl_config,
+           rm.nva082_allocated, rm.nva082_status, p2p_st);
+
+    int ok = (rm.pci_vendor == 0x10deU && rm.pci_device == 0x1bb3U &&
+              rm.virt_mode == 3U && strcmp(rm.live_profile_name, "GRID P4-4Q") == 0 &&
+              rm.live_fb_length == 0xec000000ULL &&
+              rm.live_bar1_length == 256ULL * 1024ULL * 1024ULL);
+    open_vgpu_rm_detach(&rm);
+    return ok ? 0 : 2;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && strcmp(argv[1], "--live-rm-probe") == 0) {
+        return run_live_rm_probe();
+    }
     printf("Running open-nvidia-vgpu plugin unit tests...\n");
     test_standalone_gp104_end_to_end();
     test_hybrid_interposer_and_trace();
+    test_rm_backed_vrpc_and_nva082_lifecycle();
     printf("ALL open-nvidia-vgpu PLUGIN UNIT TESTS PASSED!\n");
     return 0;
 }

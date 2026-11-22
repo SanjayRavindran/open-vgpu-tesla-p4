@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static uint64_t mono_ns(void)
 {
@@ -132,6 +133,8 @@ static void gp104_init_pci_cfg(gp104_vgpu_dev_t *dev)
 void gp104_dev_init_defaults(gp104_vgpu_dev_t *dev, uint32_t dev_handle, uint32_t vgpu_type_id)
 {
     memset(dev, 0, sizeof(*dev));
+    dev->rm.ctl_fd = -1;
+    dev->rm.gpu_fd = -1;
     dev->dev_handle = dev_handle;
     gp104_profile_lookup(vgpu_type_id, &dev->profile);
     gp104_init_pci_cfg(dev);
@@ -149,6 +152,7 @@ void gp104_dev_init_defaults(gp104_vgpu_dev_t *dev, uint32_t dev_handle, uint32_
     dev->chid_base = ((dev_handle ? (dev_handle - 1U) : 0U) * GP104_MAX_CHANNELS) % 4096U;
     dev->frl_fps = dev->profile.frl_fps ? dev->profile.frl_fps : 60U;
     dev->frl_interval_ns = 1000000000ULL / dev->frl_fps;
+    gp104_build_static_info_blobs(dev);
 }
 
 int gp104_vmmu_map_range(gp104_vgpu_dev_t *dev, uint64_t phys_start, uint64_t len)
@@ -190,7 +194,7 @@ static void unmap_ring(gp104_ring_map_t *ring)
 
 uint32_t gp104_dev_start(gp104_vgpu_dev_t *dev, const vmiop_env_v2_t *env)
 {
-    (void)env;
+    dev->host_env = env;
     char *val = NULL;
     if (vmiop_config_get(dev->dev_handle, "frame_rate_limiter", &val) == VMIOP_SUCCESS && val) {
         int en = atoi(val);
@@ -200,6 +204,25 @@ uint32_t gp104_dev_start(gp104_vgpu_dev_t *dev, const vmiop_env_v2_t *env)
         }
         free(val);
     }
+
+    const char *enable_rm = getenv("OPEN_VGPU_ENABLE_HOST_RM");
+    if (open_vgpu_rm_has_custom_sys_ops() || (enable_rm && strcmp(enable_rm, "1") == 0)) {
+        NV_STATUS rst = open_vgpu_rm_attach(&dev->rm, dev->dev_handle, dev->profile.vgpu_type_id,
+                                            dev->gpu_pci_bdf, dev->vgpu_uuid, (uint32_t)getpid());
+        if (rst == NV_OK && dev->rm.live_fb_length != 0ULL) {
+            dev->profile.usable_fb_bytes = dev->rm.live_fb_length;
+            dev->vgpu_regs[NV_VGPU_REG_FB_PAGES_M1 >> 2] =
+                (uint32_t)((dev->profile.usable_fb_bytes - 1ULL) >> 12);
+        }
+        if (rst == NV_OK && dev->rm.live_bar1_length != 0ULL) {
+            dev->profile.bar1_bytes = dev->rm.live_bar1_length;
+        }
+        if (rst == NV_OK && dev->rm.live_frl_config != 0U) {
+            dev->frl_fps = dev->rm.live_frl_config;
+            dev->frl_interval_ns = 1000000000ULL / dev->frl_fps;
+        }
+    }
+    gp104_build_static_info_blobs(dev);
 
     uint32_t out_emul = 0U;
     uint32_t rc = vmiop_register_emul_device_v2(dev->dev_handle, dev, (void *)gp104_pci_cfg_access,
@@ -231,6 +254,7 @@ void gp104_dev_reset(gp104_vgpu_dev_t *dev)
     unmap_ring(&dev->send_ring);
     unmap_ring(&dev->recv_ring);
     unmap_ring(&dev->event_ring);
+    open_vgpu_rm_free_all_guest_clients(&dev->rm);
     dev->guest_vgx_initialized = 0;
     dev->pmc_intr_0 = 0U;
     dev->pmc_intr_en_0 = 0U;
@@ -245,6 +269,7 @@ void gp104_dev_shutdown(gp104_vgpu_dev_t *dev)
     unmap_ring(&dev->send_ring);
     unmap_ring(&dev->recv_ring);
     unmap_ring(&dev->event_ring);
+    open_vgpu_rm_detach(&dev->rm);
     if (dev->dev_handle) {
         vmiop_unregister_emul_device(dev->dev_handle);
     }
@@ -394,8 +419,8 @@ static uint32_t update_ring_mapping(gp104_vgpu_dev_t *dev, gp104_ring_map_t *rin
     return rc;
 }
 
-static uint32_t record_rm_object(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp,
-                                 uint32_t ho, uint32_t cls)
+uint32_t open_vgpu_plugin_record_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp,
+                                     uint32_t ho, uint32_t cls)
 {
     for (size_t i = 0; i < GP104_MAX_RM_OBJECTS; i++) {
         if (dev->rm_objs[i].in_use && dev->rm_objs[i].h_object == ho &&
@@ -416,7 +441,7 @@ static uint32_t record_rm_object(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp
     return 0x1eU; /* NV_ERR_INSUFFICIENT_RESOURCES */
 }
 
-static uint32_t free_rm_object(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t ho)
+uint32_t open_vgpu_plugin_free_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t ho)
 {
     for (size_t i = 0; i < GP104_MAX_RM_OBJECTS; i++) {
         if (dev->rm_objs[i].in_use && dev->rm_objs[i].h_client == hc &&
@@ -461,28 +486,15 @@ uint32_t gp104_handle_vrpc_buffer(gp104_vgpu_dev_t *dev, uint8_t *buf, size_t bu
     }
 
     uint32_t status = 0U;
+    if (gp104_vrpc_rm_dispatch(dev, fn, buf, buf_len, tot, &status)) {
+        buf_w32(buf, 0x10, status);
+        return status;
+    }
+
     switch (fn) {
     case VRPC_FN_NOP:
         status = 0U;
         break;
-    case VRPC_FN_SET_GUEST_SYSTEM_INFO:
-        if (dev->guest_vgx_initialized) {
-            status = 0x40U; /* NV_ERR_INVALID_STATE */
-        } else {
-            if (tot >= 0x2cU) {
-                dev->guest_vgx_major = buf_r32(buf, 0x20);
-                dev->guest_vgx_minor = buf_r32(buf, 0x24);
-                dev->guest_os_type   = buf_r32(buf, 0x28);
-            }
-            dev->guest_vgx_initialized = 1;
-            status = 0U;
-        }
-        break;
-    case VRPC_FN_ALLOC_ROOT: {
-        uint32_t hc = (tot >= 0x24U) ? buf_r32(buf, 0x20) : 0xc1d00001U;
-        status = record_rm_object(dev, hc, hc, hc, 0U);
-        break;
-    }
     case VRPC_FN_ALLOC_DEVICE_535:
     case VRPC_FN_ALLOC_DEVICE:
     case VRPC_FN_ALLOC_SUBDEVICE:
@@ -492,13 +504,13 @@ uint32_t gp104_handle_vrpc_buffer(gp104_vgpu_dev_t *dev, uint8_t *buf, size_t bu
         uint32_t hp  = (tot >= 0x28U) ? buf_r32(buf, 0x24) : 0U;
         uint32_t ho  = (tot >= 0x2cU) ? buf_r32(buf, 0x28) : 0U;
         uint32_t cls = (tot >= 0x30U) ? buf_r32(buf, 0x2c) : fn;
-        status = record_rm_object(dev, hc, hp, ho, cls);
+        status = open_vgpu_plugin_record_obj(dev, hc, hp, ho, cls);
         break;
     }
     case VRPC_FN_FREE: {
         uint32_t hc = (tot >= 0x24U) ? buf_r32(buf, 0x20) : 0U;
         uint32_t ho = (tot >= 0x28U) ? buf_r32(buf, 0x24) : 0U;
-        status = free_rm_object(dev, hc, ho);
+        status = open_vgpu_plugin_free_obj(dev, hc, ho);
         break;
     }
     case VRPC_FN_ALLOC_CHANNEL_DMA: {
@@ -606,8 +618,8 @@ static void handle_doorbell_dispatch(gp104_vgpu_dev_t *dev)
         }
     }
 
-    if (vmiop_display_vmiop_env.inject_msi) {
-        vmiop_display_vmiop_env.inject_msi(dev->dev_handle, 0ULL, 0U);
+    if (dev->host_env && dev->host_env->inject_msi) {
+        dev->host_env->inject_msi(dev->dev_handle, 0ULL, 0U);
         dev->msi_injected_count++;
     }
 }

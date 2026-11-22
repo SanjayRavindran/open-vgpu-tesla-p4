@@ -179,3 +179,24 @@ Every VRPC message observed used header version `0x03000000` (bytes `00 00 00 03
 | `0x8e` | `VRPC_FN_OP_8E` | — | `4` (`476`) |
 | `0x8f` | `VRPC_FN_OP_8F` | — | `14` (`56`) |
 | `0x9c` | `VRPC_FN_SYNC_9C` | `8` (`3184, 4096`) | `8` (`3184, 4096`) |
+
+---
+
+## 7. Phase 1B Milestone 1B-1: Host RM Bridge & RM-Backed VRPC Implementation
+
+`open_vgpu_rm.h`, `open_vgpu_rm.c`, and `open_vrpc_rm.c` in [`open-vgpu-plugin/`](../open-vgpu-plugin/) add clean-room host RM integration for standalone `libopen-nvidia-vgpu.so`:
+
+1. **Host RM Session & `NVA081` / `NVA082` Bridge (`open_vgpu_rm.c`)**:
+   - Attaches `/dev/nvidiactl` + `/dev/nvidia0`, negotiates `NV_ESC_CHECK_VERSION_STR`, `NV_ESC_CARD_INFO`, `NV01_ROOT`, `NV0000_CTRL_CMD_GPU_ATTACH_IDS`, `NV01_DEVICE_0`, `NV20_SUBDEVICE_0`, `NVA081_VGPU_CONFIG` (`0x2a`), and allocates `NVA082_HOST_VGPU_DEVICE` (`0xa082`, `0x70`-byte params verified from `0x186a60.c`) when an active vGPU instance is present.
+   - Maintains guest-to-host `hClient` translation (`GP104_MAX_GUEST_CLIENTS = 64`) and guards reserved plugin handle ranges `((dev_handle << 24) | 0xff0000..0xffffff)` (`0xff100007`).
+   - Verified directly via `--live-rm-probe` against real Tesla P4 `nvidia.ko` (`535.309.01`) on `192.168.1.24`:
+     `pci=10de:1bb3 subsys=10de:11d8 virt_mode=3 profile="GRID P4-4Q" fb=0xec000000 bar1=0x10000000 frl=60`.
+     *(Live hardware probing also revealed that `NVA081_CTRL_CMD_VGPU_CONFIG_GET_VGPU_TYPE_INFO` returns `profileLength` `0x100000000` at `+0x188` and `usable_fb_bytes` `0xec000000` at `+0x190`, which is handled cleanly in `open_vgpu_rm_attach`.)*
+
+2. **32 RM-Backed / Session / Control VRPC Handlers (`open_vrpc_rm.c`)**:
+   - **Session & `NVA082`**: `0x01`, `0x39` (validates expiry `< 5` and forwards guest license state unchanged to `0xa0820104`), `0x3b`, `0x3e` (`0xa082010d`), `0x3f` (BAR0 PF `reg_read32`), `0x40` (`0xa0820103`), `0x50` / `0x9c` (chunked static info / GR static info transfers), `0x55` (`0xa0820110` on `40`B wire frame + legacy `56`B compatibility).
+   - **RM Client/Object Lifecycle**: `0x02` (`ALLOC_ROOT` + `0x00000902`), `0x0a` (`FREE`), `0x13` (`ALLOC_SUBDEVICE`), `0x15` (`DUP_OBJECT` `0x34`), `0x17` (`IDLE_CHANNELS`), `0x20` (`ALLOC_DEVICE` `NV01_DEVICE_0`).
+   - **RM Controls (`_nv000772vgpu` forwarders & FB info)**: `0x1a` (inline `RM_API_CONTROL`), `0x5b` (`0x20809004`), `0x5c` (`0x2080200a`), `0x61` (`0xa06c0101`/`0xa06f0103`), `0x62` (`0xa06c0103`), `0x6e` (`0x83de0309`), `0x70` (`0x20801211`), `0x71` (`0x20801210`), `0x72` (`0x20801208`), `0x78` (`0x00801812`), `0x79` (`0x20802a02`), `0x7a` (`0x90960107`), `0x7c` (`0x20803002`), `0x7d` (`0x00000127`), `0x7e` (`0x0000013a`), `0x8e` (`FbGetInfo`), `0x8f` (`0x0080170f`).
+
+3. **Remaining Milestone 1B-2 Scope (`15` Memory / MMU / Channel / PTE-Blit Opcodes)**:
+   - `0x04` (`ALLOC_MEMORY`), `0x05` (`ALLOC_CTX_DMA`), `0x06` (`ALLOC_CHANNEL_DMA`), `0x07` (`ALLOC_BAR1_VASPACE`), `0x09` (`ALLOC_OBJECT`), `0x0c` (`ALLOC_VIDMEM` / guest PFN check), `0x0e` (`MAP_MEMORY_DMA`), `0x0f` (`UNMAP_MEMORY_DMA`), `0x1b` (`FILL_PTE_MEM`), `0x1c` (`ALLOC_HWRES`), `0x21` (`SET_SEMA_MEM`), `0x2b` (`MAP_SEMA_MEM`), `0x34` (`MAP_BAR1_MEMORY`), `0x38` (`UPDATE_PDE_2`), `0x3d` (`UPDATE_GPU_PDES`) plus `vmiop_map_guest_region` direct BAR1/USERD aperture forwarding for standalone 2-VM boot.

@@ -2,6 +2,7 @@
 #define OPEN_VGPU_PLUGIN_H
 
 #include "vmiop_env.h"
+#include "open_vgpu_rm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,6 +62,7 @@ enum {
     VRPC_FN_ALLOC_MEMORY           = 0x06U,
     VRPC_FN_ALLOC_OBJECT           = 0x07U,
     VRPC_FN_FREE                   = 0x09U,
+    VRPC_FN_FREE_535               = 0x0aU,
     VRPC_FN_CONTROL                = 0x0aU,
     VRPC_FN_ALLOC_CHANNEL_DMA      = 0x0bU,
     VRPC_FN_MAP_MEMORY             = 0x0cU,
@@ -71,11 +73,15 @@ enum {
     VRPC_FN_SET_OBJECT             = 0x13U,
     VRPC_FN_IDLE_CHANNELS          = 0x14U,
     VRPC_FN_OP_15                  = 0x15U,
+    VRPC_FN_DUP_OBJECT_535         = 0x15U,
     VRPC_FN_IDLE_CHANNELS_535      = 0x16U,
     VRPC_FN_OP_17                  = 0x17U,
+    VRPC_FN_IDLE_CHANNELS_V535     = 0x17U,
     VRPC_FN_RM_API_CONTROL         = 0x1aU,
     VRPC_FN_OP_1B                  = 0x1bU,
+    VRPC_FN_FILL_PTE_MEM           = 0x1bU,
     VRPC_FN_OP_1C                  = 0x1cU,
+    VRPC_FN_ALLOC_HWRES            = 0x1cU,
     VRPC_FN_GET_ENGINE_INFO        = 0x1eU,
     VRPC_FN_SET_GUEST_FB_INFO      = 0x20U,
     VRPC_FN_SET_GUEST_SEMA_MEM     = 0x21U,
@@ -85,35 +91,60 @@ enum {
     VRPC_FN_OP_2B                  = 0x2bU,
     VRPC_FN_GET_STATIC_INFO_535    = 0x32U,
     VRPC_FN_OP_34                  = 0x34U,
+    VRPC_FN_MAP_BAR1_MEMORY        = 0x34U,
     VRPC_FN_OP_38                  = 0x38U,
+    VRPC_FN_UPDATE_PDE_2           = 0x38U,
     VRPC_FN_OP_39                  = 0x39U,
+    VRPC_FN_SET_LICENSE_STATE      = 0x39U,
     VRPC_FN_OP_3B                  = 0x3bU,
+    VRPC_FN_SET_SEMA_VALIDATION    = 0x3bU,
     VRPC_FN_OP_3D                  = 0x3dU,
+    VRPC_FN_UPDATE_GPU_PDES        = 0x3dU,
     VRPC_FN_OP_3E                  = 0x3eU,
+    VRPC_FN_GET_ENCODER_CAPACITY   = 0x3eU,
     VRPC_FN_SET_GUEST_SYSTEM_EXT   = 0x3fU,
+    VRPC_FN_VGPU_PF_REG_READ32     = 0x3fU,
     VRPC_FN_SET_GUEST_BRANCH_VER   = 0x40U,
     VRPC_FN_GET_STATIC_INFO_2      = 0x4cU,
     VRPC_FN_GET_CONSOL_STATIC_INFO = 0x4fU,
     VRPC_FN_BATCH_50               = 0x50U,
+    VRPC_FN_GET_CONSOL_STATIC_535  = 0x50U,
     VRPC_FN_GET_STATIC_INFO        = 0x55U,
     VRPC_FN_UPDATE_BAR_INFO        = 0x56U,
     VRPC_FN_OP_5B                  = 0x5bU,
+    VRPC_FN_GR_CTXSW_ZCULL         = 0x5bU,
     VRPC_FN_OP_5C                  = 0x5cU,
+    VRPC_FN_FB_GET_INFO_200A       = 0x5cU,
     VRPC_FN_OP_61                  = 0x61U,
+    VRPC_FN_GPFIFO_SCHEDULE        = 0x61U,
     VRPC_FN_OP_62                  = 0x62U,
+    VRPC_FN_TSG_CTRL               = 0x62U,
     VRPC_FN_OP_6E                  = 0x6eU,
+    VRPC_FN_SM_DEBUG_CTRL          = 0x6eU,
     VRPC_FN_OP_70                  = 0x70U,
+    VRPC_FN_GR_GFXP_PREEMPT        = 0x70U,
     VRPC_FN_OP_71                  = 0x71U,
+    VRPC_FN_GR_CTRL_1210           = 0x71U,
     VRPC_FN_OP_72                  = 0x72U,
+    VRPC_FN_GR_CTRL_1208           = 0x72U,
     VRPC_FN_OP_78                  = 0x78U,
+    VRPC_FN_DEV_CTRL_1812          = 0x78U,
     VRPC_FN_OP_79                  = 0x79U,
+    VRPC_FN_PERF_CTRL_2A02         = 0x79U,
     VRPC_FN_OP_7A                  = 0x7aU,
+    VRPC_FN_ZBC_CTRL_0107          = 0x7aU,
     VRPC_FN_OP_7C                  = 0x7cU,
+    VRPC_FN_PERF_CTRL_3002         = 0x7cU,
     VRPC_FN_OP_7D                  = 0x7dU,
+    VRPC_FN_SYS_CTRL_0127          = 0x7dU,
     VRPC_FN_OP_7E                  = 0x7eU,
+    VRPC_FN_SYS_CTRL_013A          = 0x7eU,
     VRPC_FN_OP_8E                  = 0x8eU,
+    VRPC_FN_FB_GET_INFO_8E         = 0x8eU,
     VRPC_FN_OP_8F                  = 0x8fU,
+    VRPC_FN_DEV_CTRL_170F          = 0x8fU,
     VRPC_FN_SYNC_9C                = 0x9cU,
+    VRPC_FN_GET_CONSOL_GR_535      = 0x9cU,
     VRPC_FN_MAX_OPCODE             = 0xd0U,
 };
 
@@ -245,6 +276,21 @@ typedef struct {
     uint32_t frl_fps;
     uint64_t frl_interval_ns;
     gp104_rm_obj_t rm_objs[GP104_MAX_RM_OBJECTS];
+
+    /* Phase 1B Host RM Bridge & VRPC Stateful Fields */
+    const vmiop_env_v2_t *host_env;
+    open_vgpu_rm_ctx_t rm;
+    uint32_t license_state;
+    uint8_t  license_expiry_status;
+    uint64_t guest_fb_usage_bytes;
+    char     guest_driver_ver[32];
+    char     guest_branch_ver[32];
+    uint32_t sema_mem_validation;
+    uint8_t  static_info_buf[8192];
+    uint32_t static_info_len;
+    uint8_t  gr_static_info_buf[4096];
+    uint32_t gr_static_info_len;
+    uint64_t vrpc_rm_forwarded_calls;
 } gp104_vgpu_dev_t;
 
 /* Core clean-room GP104 engine entrypoints */
@@ -260,6 +306,12 @@ uint32_t gp104_bar0_access(void *priv, uint32_t is_write, uint32_t emul_space,
                            uint64_t offset, uint32_t width, void *data, uint32_t *dummy);
 
 uint32_t gp104_handle_vrpc_buffer(gp104_vgpu_dev_t *dev, uint8_t *buf, size_t buf_len);
+int      gp104_vrpc_rm_dispatch(gp104_vgpu_dev_t *dev, uint32_t fn, uint8_t *buf,
+                                size_t buf_len, uint32_t tot, uint32_t *out_status);
+void     gp104_build_static_info_blobs(gp104_vgpu_dev_t *dev);
+uint32_t open_vgpu_plugin_record_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t hp,
+                                     uint32_t ho, uint32_t cls);
+uint32_t open_vgpu_plugin_free_obj(gp104_vgpu_dev_t *dev, uint32_t hc, uint32_t ho);
 int      gp104_vmmu_map_range(gp104_vgpu_dev_t *dev, uint64_t phys_start, uint64_t len);
 int      gp104_chid_alloc(gp104_vgpu_dev_t *dev, uint32_t guest_chid, uint32_t *out_phys_chid);
 void     gp104_chid_free(gp104_vgpu_dev_t *dev, uint32_t guest_chid);
