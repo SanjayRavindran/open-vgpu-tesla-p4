@@ -1,12 +1,12 @@
 # Complete Host & Guest Installation Guide (`open-vgpu-tesla-p4` & `open-580-driver`)
 
-This guide provides step-by-step instructions to install either the **50/50 Multi-VM `open-vgpu-tesla-p4` (`535.309.01-vgpu-kvm` + 6 Clean-Room Open-Source Host Binaries)** stack or the **Bare-Metal / PCIe-Passthrough `open-580-driver` (`580.178.04`)** stack across **Host** and **Guest** machines.
+This guide provides step-by-step instructions to install either the **50/50 Multi-VM `open-vgpu-tesla-p4` (`535.309.01-vgpu-kvm` + 11 Clean-Room Open-Source Host & Guest Components)** stack or the **Bare-Metal / PCIe-Passthrough `open-580-driver` (`580.178.04`)** stack across **Host** and **Guest** machines.
 
 ---
 
 ## 1. Track A — `open-vgpu-tesla-p4` (`535.309.01-vgpu-kvm` 50/50 Multi-VM Host & Guests)
 
-Use this track to partition a single Tesla P4 into **two concurrent `GRID P4-4Q` (`nvidia-65`, `4096 MiB` VRAM each) vGPUs** on **Ubuntu 24.04/26.04 KVM** or **Proxmox VE 8/9**, running **all 6 clean-room open-source host userspace binaries**:
+Use this track to partition a single Tesla P4 into **two concurrent `GRID P4-4Q` (`nvidia-65`, `4096 MiB` VRAM each) vGPUs** on **Ubuntu 24.04/26.04 KVM** or **Proxmox VE 8/9**, running **all 11 clean-room open-source host & guest components**:
 1. **`open-nvidia-vgpud`** (`Rust`, `nova-vgpu/`) — RM `NVA081` profile registrar
 2. **`libopen-vgxcfg.so`** (`C`, `open-vgxcfg/`) — XML DOM configuration library (`9/9` exports)
 3. **`open-nvidia-xid-logd`** (`C`, `open-xid-logd/`) — NVML XID event & Base64 debugdump daemon

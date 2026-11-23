@@ -162,12 +162,11 @@ chmod +x packaging/build-package.sh packaging/debian/postinst packaging/debian/p
 - [`packaging/debian/prerm`](../packaging/debian/prerm): Stops `nvidia-gridd.service` cleanly on package removal (`remove`, `deconfigure`, or RPM `0`).
 - **Artifacts in `dist/`:** `nvidia-gridd_<version>_<arch>.deb`, `nvidia-gridd-<version>-Linux.tar.gz` (plus `.rpm` on RPM hosts), and `SHA256SUMS`. After packaging `.deb` files, `build-package.sh` inspects metadata (`dpkg-deb -I`) and file layout (`dpkg-deb -c`).
 
-### Windows-to-Linux Remote Packaging & Antigravity Skill
-- Workspace skill: [`.agents/skills/build-and-package-gridd/SKILL.md`](../.agents/skills/build-and-package-gridd/SKILL.md)
-- PowerShell helper: [`.agents/skills/build-and-package-gridd/scripts/remote-package.ps1`](../.agents/skills/build-and-package-gridd/scripts/remote-package.ps1)
-
-```powershell
-# Sync clean-room sources, strip CRLF on scripts, build/test on 192.168.1.15, and download dist/
-powershell -ExecutionPolicy Bypass -File ".agents\skills\build-and-package-gridd\scripts\remote-package.ps1" -Clean
-```
+### Integrated Multi-Distro Provisioning & CI Verification
+- **Guest Provisioning (`scripts/provision_linux_vgpu_guest.sh --with-open-gridd`)**: Builds `nvidia-gridd` from `open-gridd/`, installs `/usr/bin/nvidia-gridd`, stages `/etc/nvidia/gridd.conf`, fetches the FastAPI-DLS `.tok` file into `/etc/nvidia/ClientConfigToken/`, and restarts `nvidia-gridd.service` (verified live on AlmaLinux 10.3 `192.168.1.68` -> `License Status : Licensed`).
+- **Repository Make & CI Gate**:
+  ```bash
+  make -C open-gridd clean all test clean
+  ```
+  Automatically runs `c_unit_tests`, `tests/run_c_e2e.py`, and `python3 -B -m unittest discover -s tests -v` in GitHub Actions CI.
 

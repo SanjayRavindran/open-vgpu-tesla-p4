@@ -27,6 +27,7 @@ sequenceDiagram
     Main->>Store: "gridd_trusted_store_check_clock(&store, now)"
 
     Main->>NLS: "gridd_nls_register_or_update_origin()"
+    Note over NLS: "Ensure candidate_origin_ref (RFC 4122 UUIDv4 fallback if machine-id/DMI missing)"
     alt "origin_ref is empty (first boot)"
         NLS->>HTTP: "POST https://node:auth_port/auth/v1/origin (environment JSON)"
     else "origin_ref exists and fingerprint changed"
@@ -37,22 +38,22 @@ sequenceDiagram
     NLS->>Store: "gridd_trusted_store_save() (origin_ref + env hash)"
 
     Main->>NLS: "gridd_nls_authenticate()"
-    Note over NLS: "Generate 32B random code_verifier & Base64URL SHA-256 code_challenge"
+    Note over NLS: "Generate 32B random code_verifier & Base64URL SHA-256 code_challenge (without -/_ for FastAPI-DLS)"
     NLS->>HTTP: "POST https://node:auth_port/auth/v1/code { origin_ref, code_challenge, S256 }"
     Server-->>HTTP: "200 OK { code }"
     NLS->>HTTP: "POST https://node:auth_port/auth/v1/token { code, code_verifier }"
-    Server-->>HTTP: "200 OK { auth_token }"
+    Server-->>HTTP: "200 OK { auth_token[2048] (RS256 JWS) }"
 
     Main->>NLS: "gridd_nls_acquire_lease(product_name, product_count)"
-    NLS->>NLS: "gridd_nls_build_lease_proposal_json()"
+    NLS->>NLS: "Build lease proposal (default product_name + GRID-Virtual-WS + count=1)"
     NLS->>HTTP: "POST https://node:lease_port/leasing/v1/lessor (Bearer auth_token)"
     Server-->>HTTP: "200 OK { lease_ref, created, expires, recommended_renewal } (or 307/401/502)"
     NLS->>Store: "gridd_trusted_store_save() (lease_ref, created, expires, active_node_idx)"
-    Main->>RM: "gridd_rm_enable_feature() & gridd_rm_set_license_status(LICENSED)"
+    Main->>RM: "RM 0x20808161 feature & timed RM 0x20800187 state=2 (Licensed + Expiry)"
 
     loop "Every recommended_renewal * duration"
         Main->>NLS: "gridd_nls_renew_lease()"
-        NLS->>HTTP: "PUT https://node:lease_port/leasing/v1/lease/{lease_ref}"
+        NLS->>HTTP: "PUT https://node:lease_port/leasing/v1/lease/{lease_ref} (body: {})"
         Server-->>HTTP: "200 OK { expires } (or 401 refresh / 404 re-acquire / 502 failover)"
         NLS->>Store: "gridd_trusted_store_save() (updated timestamps)"
     end
@@ -78,7 +79,8 @@ flowchart TD
     CheckFormat -- "No" --> ErrInvalid["Return GRIDD_ERR_INVALID_PARAM"]
     CheckFormat -- "Yes" --> DecodeHdr["Decode header JSON & inspect alg (ES256 / RS256)"]
 
-    DecodeHdr --> VerifyKey["Verify signing input (header.payload) against pinned NLS root PEMs"]
+    DecodeHdr --> ParseKey["Select PEM: payload service_instance_public_key (DLS) or pinned NLS root PEMs"]
+    ParseKey --> VerifyKey["Verify signing input (header.payload) via OpenSSL EVP_DigestVerify"]
     VerifyKey --> SigOK{"Signature valid?"}
     SigOK -- "No" --> ErrAuth["Return GRIDD_ERR_AUTH"]
     SigOK -- "Yes" --> DecodePay["Base64URL-decode payload JSON"]
@@ -132,22 +134,23 @@ Implemented in [`src/rm_client.c`](../src/rm_client.c) using `/dev/nvidiactl` an
 ```mermaid
 flowchart TD
     Init(["gridd_rm_init()"]) --> OpenCtl["ops.open_fn(/dev/nvidiactl, O_RDWR)"]
-    OpenCtl --> CheckVer["ioctl(NV_ESC_CHECK_VERSION_STR) & NV_ESC_SYS_PARAMS"]
+    OpenCtl --> CheckVer["NV_ESC_CHECK_VERSION_STR (0xc04846d2, cmd=0x31) & NV_ESC_SYS_PARAMS"]
     CheckVer --> AllocRoot["NV_ESC_RM_ALLOC (root client handle, class 0x0000)"]
-    AllocRoot --> GetIDs["NV_ESC_RM_CONTROL(NV0000_CTRL_CMD_GPU_GET_ATTACHED_IDS -> NV0000_CTRL_CMD_GPU_ATTACH_IDS)"]
+    AllocRoot --> GetIDs["NV0000_CTRL_CMD_GPU_GET_ATTACHED_IDS & GET_ID_INFO_V2 (instance at +0x08)"]
     GetIDs --> LoopGPUs["For each attached GPU (up to GRIDD_MAX_GPUS = 32)"]
 
-    LoopGPUs --> AllocDev["NV_ESC_RM_ALLOC Device (0xdae00100 | i, class 0x0080)"]
+    LoopGPUs --> RegDev["Open /dev/nvidiaN & NV_ESC_REGISTER_FD (0xc00446c9)"]
+    RegDev --> AllocDev["NV_ESC_RM_ALLOC Device (0xdae00100 | i, 0x0080, 0x28B with 128B fallback)"]
     AllocDev --> AllocSub["NV_ESC_RM_ALLOC Subdevice (0xdae00200 | i, class 0x2080)"]
     AllocSub --> CheckVirt["NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE"]
     CheckVirt --> IsGuest{"mode == NV_VGPU_VIRTUALIZATION_MODE_GUEST (2)?"}
     IsGuest -- "Yes" --> AllocVGPU["NV_ESC_RM_ALLOC vGPU object (0xdae00300 | i, class 0xa080)"]
-    IsGuest -- "No" --> QueryFeat["gridd_rm_query_features() & gridd_rm_query_pci_ids()"]
+    IsGuest -- "No" --> QueryFeat["gridd_rm_query_features() (0x20808161 +0x86/+0x05, mock +0x04) & PCI IDs"]
     AllocVGPU --> QueryFeat
 
     QueryFeat --> RuntimeOps["Runtime Controls Per License Transition"]
     RuntimeOps --> EnableF["NV2080_CTRL_CMD_GPU_ENABLE_LICENSED_FEATURE (0x20800186)"]
-    RuntimeOps --> SetStatus["NV2080_CTRL_CMD_GPU_SET_LICENSE_STATUS (0x20800187: state, expiry, duration)"]
+    RuntimeOps --> SetStatus["NV2080_CTRL_CMD_GPU_SET_LICENSE_STATUS (0x20800187: state=2, expiry, duration)"]
     RuntimeOps --> DisableF["NV2080_CTRL_CMD_GPU_DISABLE_LICENSED_FEATURE (0x20800164)"]
 
     Init --> SpawnMon["gridd_rm_start_unlicensed_monitor(stop_pipe_rd)"]
@@ -258,8 +261,8 @@ flowchart TD
     IsHTTPS -- "No" --> SendPlain["Send HTTP/1.1 request over plain TCP socket"]
     IsHTTPS -- "Yes" --> TLSHandshake["SSL_CTX_new(TLS_client_method()), min TLS 1.2, SNI SSL_set_tlsext_host_name()"]
 
-    TLSHandshake --> VerifyPeer{"opts->tls_verify_peer?"}
-    VerifyPeer -- "Yes" --> SetVerify["SSL_CTX_set_default_verify_paths() & SSL_VERIFY_PEER + X509 hostname check"]
+    TLSHandshake --> VerifyPeer{"opts->tls_verify_peer (false for self-signed DLS unless pinned)?"}
+    VerifyPeer -- "Yes" --> SetVerify["Load CA path / default verify paths & SSL_VERIFY_PEER + X509 hostname check"]
     VerifyPeer -- "No" --> DoConnect["SSL_connect(ssl)"]
     SetVerify --> DoConnect
     DoConnect --> SendTLS["SSL_write(HTTP/1.1 headers + body)"]

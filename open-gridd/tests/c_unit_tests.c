@@ -113,6 +113,10 @@ static void test_crypto_and_trusted_store(void) {
     TEST_ASSERT(reopened.data.registered == true);
 
     TEST_ASSERT(gridd_trusted_store_check_clock(&reopened, 100U) == GRIDD_ERR_CLOCK_WINDBACK);
+
+    remove("/tmp/gridd_store_test/store_nls.dat");
+    remove("/tmp/gridd_store_test/store_nls.tag");
+    remove("/tmp/gridd_store_test");
 }
 
 typedef struct {

@@ -9,8 +9,8 @@ Permanent engineering record of the clean-room `nvidia-gridd` C11 project, archi
 This repository contains a standalone clean-room C11 Linux reimplementation of `nvidia-gridd` (NVIDIA vGPU / GRID licensing daemon), built strictly from externally observable protocol, configuration, cryptographic, and kernel RM ABI behavior documented in [`docs/SPECIFICATION.md`](SPECIFICATION.md).
 
 ### Strict Clean-Room Rules
-- **Clean-room directories:** [`CMakeLists.txt`](../CMakeLists.txt), [`README.md`](../README.md), [`include/gridd/`](../include/gridd/), [`src/`](../src/), [`packaging/`](../packaging/), [`tests/`](../tests/), [`docs/`](.), and [`.agents/skills/build-and-package-gridd/`](../.agents/skills/build-and-package-gridd/).
-- **Reference-only inputs (untouched):** `nvidia-gridd` (original ELF64 binary at workspace root) and `decompiled/` (original analysis artifacts).
+- **Clean-room directories:** [`Makefile`](../Makefile), [`CMakeLists.txt`](../CMakeLists.txt), [`README.md`](../README.md), [`include/gridd/`](../include/gridd/), [`src/`](../src/), [`packaging/`](../packaging/), [`tests/`](../tests/), and [`docs/`](.).
+- **Clean-room boundary:** Zero proprietary binaries or vendor source files live inside `open-gridd/`; all interfaces follow [`docs/SPECIFICATION.md`](SPECIFICATION.md).
 - **Automated leak & hygiene guard:** [`tests/test_c_static_audit.py`](../tests/test_c_static_audit.py) automatically fails if any decompiler symbol patterns, tool names, banned unsafe C functions (`strcpy`, `strcat`, `sprintf`, `gets`), or `<curl/curl.h>` includes appear anywhere in clean-room code, tests, packaging, or documentation, and asserts all `.c` files in `src/` match `CMakeLists.txt`.
 
 ---
@@ -32,6 +32,7 @@ This repository contains a standalone clean-room C11 Linux reimplementation of `
 
 | Path | Role |
 | --- | --- |
+| [`Makefile`](../Makefile) | Integrated C11 Makefile (`all`, `install`, `test`, `clean`) used by guest provisioning scripts and CI. |
 | [`CMakeLists.txt`](../CMakeLists.txt) | C11 (`-Wall -Wextra -Werror -Wpedantic`) build for `gridd_core`, `nvidia-gridd`, `c_unit_tests`, `c_e2e_tests`, install rules, and CPack configuration. |
 | [`README.md`](../README.md) | Top-level overview, Mermaid architecture summary, documentation index, and build/test commands. |
 | [`include/gridd/*.h`](../include/gridd/) (15 headers) | Public API declarations (`92` `gridd_*` functions, structs, enums, ioctl constants, and bounds). |
@@ -43,47 +44,44 @@ This repository contains a standalone clean-room C11 Linux reimplementation of `
 | [`packaging/build-package.sh`](../packaging/build-package.sh) | Automated Linux build, test (`ctest`, `run_c_e2e.py`, `unittest`), CPack (`.deb`/`.tar.gz`/`.rpm`), `SHA256SUMS`, and `dpkg-deb` verification script. |
 | [`tests/`](../tests/) (7 files) | `c_unit_tests.c`, `c_e2e_tests.c`, `mock_nls_server.py`, `mock_imds_server.py`, `run_c_e2e.py`, `test_cleanroom_spec.py`, `test_c_static_audit.py`. |
 | [`docs/`](.) (7 files) | `SPECIFICATION.md`, `ARCHITECTURE.md`, `FLOWCHARTS.md`, `API_REFERENCE.md`, `CALL_GRAPH.md`, `OPERATIONS_AND_TESTING.md`, `PROJECT_HANDOFF.md`. |
-| [`.agents/skills/build-and-package-gridd/`](../.agents/skills/build-and-package-gridd/) | Antigravity workspace skill (`SKILL.md` + `scripts/remote-package.ps1`) automating local Linux and remote SSH Windows-to-Ubuntu builds/packaging. |
 
 ---
 
 ## 4. Development & Remote Ubuntu Build Environment
 
 - **Local Host (Windows):**
-  - Path: `c:\Users\Sanjay\Documents\AI Projects\Gridd`
+  - Integrated path: `open-pascal-vgpu/open-gridd/` (`open-vgpu-tesla-p4` repository)
   - No native C compiler installed locally; Python 3 is available.
   - **Important convention:** Always run local Python commands with `python -B` (for example `python -B -m unittest discover -s tests -v`) to prevent creating `tests/__pycache__` in the workspace.
 - **Remote Build Host (Linux / SSH):**
   - SSH host alias/IP: `192.168.1.15` (user `zero`, configured in `~/.ssh/config`)
-  - OS & Toolchain: Ubuntu 26.04 LTS (`x86_64`), GCC `15.2.0`, Clang `21.1.8`, CMake, CPack, Ninja, OpenSSL `3.5.5`, `dpkg-deb`, `dpkg-shlibdeps`, `fakeroot`, Python 3 with `cryptography`.
-  - Clean-room remote directory: `/home/zero/rea-projects/gridd/cleanroom` (do **not** touch files outside `cleanroom/` in `/home/zero/rea-projects/gridd/`).
-  - PowerShell helper: `.agents\skills\build-and-package-gridd\scripts\remote-package.ps1` syncs files over `scp`, strips Windows `\r` line endings on shell scripts, compiles, runs tests, and invokes CPack.
+  - OS & Toolchain: Ubuntu 26.04 LTS (`x86_64`), GCC `15.2.0`, Clang `21.1.8`, Make, CMake, CPack, Ninja, OpenSSL `3.5.5`, `dpkg-deb`, `dpkg-shlibdeps`, `fakeroot`, Python 3 with `cryptography`.
+  - Integrated remote repository: `/home/zero/open-pascal-vgpu/open-gridd` (`git` + GitHub CLI workflows).
 
 ---
 
 ## 5. Verified Baseline Status
 
-All tiers were verified prior to documentation handoff:
-1. **Local Windows Python Conformance & Static Audit:** `python -B -m unittest discover -s tests -v` passed **11/11** tests (`2.219s`), including balanced C delimiter/guard checks, CMake source list parity, symbol definitions, protocol/RM constant parity, and zero leakage.
-2. **Remote GCC 15.2.0 + Ninja Release Build & Package (`192.168.1.15`):**
-   - Compiled **21/21** CMake targets cleanly with `-std=c11 -Wall -Wextra -Werror -Wpedantic`.
-   - `ctest --output-on-failure`: passed **1/1** (`c_unit_tests`).
-   - `python3 -B tests/run_c_e2e.py build-pkg/c_e2e_tests`: passed live C-to-mock NLS (`12` HTTP requests) + AWS IMDSv2 verification.
-   - `python3 -B -m unittest discover -s tests -v`: passed **11/11** tests (`1.987s`).
-   - CPack generated `/home/zero/rea-projects/gridd/cleanroom/dist/nvidia-gridd_1.0.0_amd64.deb` (`51098` bytes, `Depends: libc6 (>= 2.38), libssl3t64 (>= 3.0.0)`) and `nvidia-gridd-1.0.0-Linux.tar.gz` with verified `SHA256SUMS`.
-3. **Clang 21.1.8 Verification (earlier remote build check):** Compiled and passed `ctest` **1/1** cleanly under `-DCMAKE_C_COMPILER=clang`.
+All tiers and live FastAPI-DLS integration were verified:
+1. **Local Windows Python Conformance & Static Audit:** `python -B -m unittest discover -s tests -v` passed **11/11** tests, including balanced C delimiter/guard checks, CMake source list parity, symbol definitions, protocol/RM constant parity, and zero leakage.
+2. **Remote GCC 15.2.0 Make, CMake/Ninja & GitHub Actions CI Verification:**
+   - `make -C open-gridd clean all test clean` passed `c_unit_tests`, `tests/run_c_e2e.py`, and `unittest` (`11/11`) in both remote Ubuntu 26.04 and GitHub Actions CI.
+   - Compiled **21/21** CMake targets cleanly with `-std=c11 -Wall -Wextra -Werror -Wpedantic`, passed `ctest` (`1/1`), passed `run_c_e2e.py`, and generated `.deb`/`.tar.gz` packages with `SHA256SUMS`.
+3. **Live AlmaLinux 10.3 vGPU Guest Verification (`vm-alma` @ `192.168.1.68` -> FastAPI-DLS `192.168.1.24:443`):**
+   - `nvidia-gridd.service` started and restarted cleanly under systemd; `nvidia-smi -q` reported `License Status : Licensed (Expiry: 2027-2-21 17:41:22 GMT)` on `NVIDIA RTX Virtual Workstation`.
+4. **Clang 21.1.8 Verification:** Compiled and passed `ctest` **1/1** cleanly under `-DCMAKE_C_COMPILER=clang`.
 
 ---
 
-## 6. Quick Start in a New Conversation
+## 6. Quick Start
 
-- **Run local static/spec tests (Windows, no `__pycache__`):**
-  ```powershell
-  python -B -m unittest discover -s tests -v
+- **Run local static/spec tests (Windows or Linux, no `__pycache__`):**
+  ```bash
+  python3 -B -m unittest discover -s tests -v
   ```
-- **Sync, compile, test, and package remotely via Ubuntu (`192.168.1.15`):**
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File ".agents\skills\build-and-package-gridd\scripts\remote-package.ps1" -Clean
+- **Compile, test, and clean via integrated Makefile on Linux:**
+  ```bash
+  make -C open-gridd clean all test clean
   ```
 - **Compile and package directly on Linux:**
   ```bash

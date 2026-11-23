@@ -29,12 +29,15 @@ flowchart LR
 
 ## Repository Layout
 - `include/gridd/` & `src/` — Modular C11 daemon implementation (`gridd_core` + `nvidia-gridd`) linking system OpenSSL 3.x (`OpenSSL::SSL`, `OpenSSL::Crypto`), POSIX threads/signals/sockets, and `dlopen("libdbus-1.so.3")`.
+- `Makefile` & `CMakeLists.txt` — Integrated `make` / `make install` / `make test` targets (installing `/usr/bin/nvidia-gridd` for guest provisioning & CI) plus CMake/CPack `.deb`/`.tar.gz`/`.rpm` rules.
 - `packaging/` — [`nvidia-gridd.service`](packaging/nvidia-gridd.service), [`gridd.conf.template`](packaging/gridd.conf.template), [`build-package.sh`](packaging/build-package.sh), and Debian maintainer hooks (`packaging/debian/postinst`, `packaging/debian/prerm`).
-- `.agents/skills/build-and-package-gridd/` — Workspace skill and [`remote-package.ps1`](.agents/skills/build-and-package-gridd/scripts/remote-package.ps1) helper for remote Ubuntu compilation & CPack packaging from Windows.
 - `tests/` — C11 unit tests (`c_unit_tests.c`), compiled C live integration harness (`c_e2e_tests.c` + `run_c_e2e.py`), mock NLS/IMDS servers, Python conformance tests (`test_cleanroom_spec.py`), and static clean-room audit (`test_c_static_audit.py`).
 
 ## Quick Start (Linux)
 ```bash
+# Integrated Makefile build & 3-tier verification (C unit + E2E + static audit):
+make -C open-gridd all test
+
 # Build & package (.deb + .tar.gz + SHA256SUMS) with all verification checks:
 ./packaging/build-package.sh --clean
 

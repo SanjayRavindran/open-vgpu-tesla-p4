@@ -101,7 +101,7 @@ flowchart TD
     ParseArgs --> HttpInit["gridd_http_global_init() & gridd_daemon_init()"]
     HttpInit --> RmInit["gridd_rm_init() & set SW state persistence"]
     RmInit --> UnlicMon["Start 30s unlicensed state monitor thread"]
-    UnlicMon --> LoadCfg["gridd_config_load(/etc/nvidia/gridd.conf)"]
+    UnlicMon --> LoadCfg["gridd_config_load(/etc/nvidia/gridd.conf; defaults FeatureType=2 on vGPU guests)"]
     LoadCfg --> CheckUI{"config.enable_ui == true?"}
     CheckUI -- "Yes" --> SpawnDBus["Spawn gridd_dbus_thread_main thread"]
     CheckUI -- "No" --> EnsureDirs["gridd_ensure_state_dirs()"]
@@ -125,9 +125,9 @@ flowchart TD
     TryNLL -- "No" --> WaitTok["wait_for_token(): poll ClientConfigToken dir (10s..300s backoff)"]
     WaitTok --> StopBeforeTok{"Stop requested?"}
     StopBeforeTok -- "Yes" --> Cleanup
-    StopBeforeTok -- "No" --> VerifyTok["gridd_token_parse_and_verify()"]
-    VerifyTok --> DisableUI["Disable UI via gridd_config_disable_ui() & gridd_lm_create()"]
-    DisableUI --> StartLM["gridd_lm_acquire() starts background worker"]
+    StopBeforeTok -- "No" --> VerifyTok["gridd_token_parse_and_verify() (ES256/RS256 + payload pubkey)"]
+    VerifyTok --> DisableUI["Disable UI if non-vGPU or gridd.conf exists & gridd_lm_create()"]
+    DisableUI --> StartLM["gridd_lm_acquire() -> timed RM 0x20800187 state=2 + Expiry"]
     StartLM --> MainLoop["select() on exit_pipe_rd, lm.event_pipe_rd, dbus_pipe_rd"]
 
     MainLoop -- "exit_pipe readable" --> StopLM["gridd_lm_stop() returns active leases & shuts down"]
@@ -196,11 +196,15 @@ stateDiagram-v2
 
 ## 5. Build System & Packaging
 
-Defined in [`CMakeLists.txt`](../CMakeLists.txt):
-- **Standard & Flags:** C11 (`CMAKE_C_STANDARD 11`, `CMAKE_C_STANDARD_REQUIRED ON`, `CMAKE_C_EXTENSIONS OFF`) with `-Wall -Wextra -Werror -Wpedantic` (and `-D_POSIX_C_SOURCE=200809L`).
-- **Targets:**
+Defined in [`Makefile`](../Makefile) (repository integration & guest/CI builds) and [`CMakeLists.txt`](../CMakeLists.txt):
+- **Standard & Flags:** C11 with `-Wall -Wextra -Werror -Wpedantic` (and `-D_POSIX_C_SOURCE=200809L`).
+- **Makefile Targets:**
+  - `make`: builds `nvidia-gridd`, `c_unit_tests`, and `c_e2e_tests` against OpenSSL 3.x (`libssl`/`libcrypto`), `pthread`, and `dl`.
+  - `make install`: installs the daemon to `$(DESTDIR)$(PREFIX)/bin/nvidia-gridd` (default `/usr/bin/nvidia-gridd`) for drop-in `provision_linux_vgpu_guest.sh` and RPM/DEB/systemd replacement.
+  - `make test`: executes `c_unit_tests`, `tests/run_c_e2e.py`, and `tests/test_c_static_audit.py`.
+- **CMake Targets:**
   - `gridd_core` (`STATIC`): 14 library translation units under `src/` (excluding `src/main.c`). Links `OpenSSL::SSL`, `OpenSSL::Crypto`, `Threads::Threads`, `${CMAKE_DL_LIBS}`.
-  - `nvidia-gridd` (`EXECUTABLE`): `src/main.c` linked against `gridd_core`. Installed to `sbin`.
+  - `nvidia-gridd` (`EXECUTABLE`): `src/main.c` linked against `gridd_core`. Installed to `sbin` (when packaged via CMake).
   - `c_unit_tests` (`EXECUTABLE`): [`tests/c_unit_tests.c`](../tests/c_unit_tests.c) linked against `gridd_core`; registered with CTest (`gridd_c_unit_tests`).
   - `c_e2e_tests` (`EXECUTABLE`): [`tests/c_e2e_tests.c`](../tests/c_e2e_tests.c) linked against `gridd_core`; driven by [`tests/run_c_e2e.py`](../tests/run_c_e2e.py).
 - **Packaging Files:**
