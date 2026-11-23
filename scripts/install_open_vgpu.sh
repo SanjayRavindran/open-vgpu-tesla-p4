@@ -101,7 +101,7 @@ case "$ROLE" in
     [[ -n "$RDP_PASS" ]] && GUEST_ARGS+=(--rdp-pass "$RDP_PASS")
     [[ "$WITH_SELKIES" -eq 1 ]] && GUEST_ARGS+=(--with-selkies)
     [[ "$DRY_RUN" -eq 1 ]] && GUEST_ARGS+=(--dry-run)
-    bash "$SCRIPT_DIR/provision_alma_guest.sh" "${GUEST_ARGS[@]}"
+    bash "$SCRIPT_DIR/provision_linux_vgpu_guest.sh" "${GUEST_ARGS[@]}"
     ;;
 
   guest-windows)

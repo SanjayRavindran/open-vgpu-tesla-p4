@@ -19,6 +19,18 @@ Enable IOMMU and UEFI in BIOS / GRUB (`intel_iommu=on iommu=pt` on Xeon E3-1275 
 
 ## 2. Clean Host DKMS Packaging & Open-Source Host Daemons
 
+### Option A: One-Shot Proxmox VE 8 / 9 Host Configurator (`scripts/install_proxmox_vgpu_host.sh`)
+On a **Proxmox VE 8 / 9** host, run [`scripts/install_proxmox_vgpu_host.sh`](../scripts/install_proxmox_vgpu_host.sh) to configure Proxmox repositories, `proxmox-headers-$(uname -r)`, GRUB & `proxmox-boot-tool` IOMMU parameters, `/etc/modules`, DKMS `535.309.01` + all 8 clean-room open-source host artifacts, native systemd FastAPI-DLS, and optional 50/50 VM creation in one command:
+
+```bash
+sudo bash scripts/install_proxmox_vgpu_host.sh \
+  --run-file /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
+  --enable-no-subscription-repo \
+  --dls-url <PVE_HOST_IP> \
+  --setup-vms fresh
+```
+
+### Option B: Direct DKMS Installer (`scripts/install_vgpu_host_dkms.sh` — Ubuntu KVM or Proxmox VE)
 Run [`scripts/install_vgpu_host_dkms.sh`](../scripts/install_vgpu_host_dkms.sh) on either Ubuntu KVM or Proxmox VE:
 
 ```bash
@@ -103,17 +115,18 @@ VM hardware profiles created by default:
 
 ---
 
-## 5. Guest Provisioning (AlmaLinux 10.3 & Windows 11 24H2)
+## 5. Guest Provisioning (Multi-Distro Linux Guest & Windows 11 24H2)
 
-- **AlmaLinux 10.3 (`provision_alma_guest.sh`)**:
-  Installs `535.309.01` GRID kernel modules + overlays `620.70.06` Wayland/GBM libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`), sets `GSK_RENDERER=ngl` globally, enables pure Wayland `--no-x11 --headless` + user-session headless RDP on `:3389`, applies [`scripts/patch_grd_ptx_535.sh`](../scripts/patch_grd_ptx_535.sh), installs the FastAPI-DLS token, and optionally runs [`scripts/setup_selkies_pixelflux_vgpu.sh`](../scripts/setup_selkies_pixelflux_vgpu.sh):
+- **Multi-Distro Linux Guest (`scripts/provision_linux_vgpu_guest.sh` — RHEL, AlmaLinux, Rocky, Oracle, CentOS, Ubuntu LTS, Debian)**:
+  Auto-detects `/etc/os-release` across **Enterprise Linux (`dnf`/`yum`, `/usr/lib64`, `/etc/gdm/custom.conf`, `dracut -f`, `firewall-cmd`)** and **Ubuntu LTS / Debian (`apt-get`, `/usr/lib/x86_64-linux-gnu`, `/etc/gdm3/*.conf`, `update-initramfs -u`, `ufw`)**, installs `535.309.01` GRID kernel modules (with automatic Linux `6.12+`/`7.x+` compatibility patching) + overlays `620.70.06` Wayland/GBM libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`), sets `GSK_RENDERER=ngl` globally, enables pure Wayland `--no-x11 --headless` + user-session headless RDP on `:3389`, applies [`scripts/patch_grd_ptx_535.sh`](../scripts/patch_grd_ptx_535.sh), installs the FastAPI-DLS token, builds `libopen-nvidia-encode.so`, and optionally runs [`scripts/setup_selkies_pixelflux_vgpu.sh`](../scripts/setup_selkies_pixelflux_vgpu.sh):
   ```bash
-  sudo bash scripts/provision_alma_guest.sh \
+  sudo bash scripts/provision_linux_vgpu_guest.sh \
     --dls-url https://<HOST_IP> \
     --grid-535-run /path/to/NVIDIA-Linux-x86_64-535.309.01-grid.run \
     --grid-620-run /path/to/NVIDIA-Linux-x86_64-620.70.06-grid.run \
     --rdp-user zero --rdp-pass '<PASSWORD>' --with-selkies
   ```
+  *(Note: [`scripts/provision_alma_guest.sh`](../scripts/provision_alma_guest.sh) remains available as a backward-compatible wrapper around `provision_linux_vgpu_guest.sh`.)*
 
 - **Windows 11 24H2 (`provision_win11_guest.ps1` + `scripts/templates/win11-autounattend.xml`)**:
   Use [`scripts/templates/win11-autounattend.xml`](../scripts/templates/win11-autounattend.xml) (substituting `__ADMIN_PASSWORD__`) for zero-prompt Win11 installation with WinRM NTLM and RDP pre-enabled, then run:

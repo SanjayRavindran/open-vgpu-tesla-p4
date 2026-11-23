@@ -23,9 +23,10 @@ for libdir in /usr/lib64 /usr/lib/x86_64-linux-gnu; do
 done
 ldconfig
 
-# 2. On x86-64-v2 CPUs (e.g. Ivy Bridge Xeon E3-1275 V2) running el10 packages,
-#    strip the .note.gnu.property x86-64-v3 ELF marker from Go/C container binaries.
-if grep -q "AlmaLinux.*10" /etc/os-release 2>/dev/null; then
+# 2. On x86-64-v2 CPUs (e.g. Ivy Bridge Xeon E3-1275 V2) running el10 packages
+#    (AlmaLinux 10, RHEL 10, Rocky 10, CentOS Stream 10), strip the .note.gnu.property
+#    x86-64-v3 ELF marker from Go/C container binaries.
+if grep -qE "(AlmaLinux|Red Hat|Rocky|Oracle|CentOS).*10" /etc/os-release 2>/dev/null; then
   for b in /usr/bin/docker* /usr/bin/containerd* /usr/bin/runc /usr/bin/ctr \
            /usr/bin/nvidia-ctk /usr/bin/nvidia-container* /usr/bin/nvidia-cdi-hook \
            /usr/lib64/libnvidia-container*.so* /usr/libexec/docker/cli-plugins/*; do

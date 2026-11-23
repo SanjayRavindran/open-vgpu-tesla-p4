@@ -144,9 +144,11 @@ All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin,
   - `open-host-rm` (`libopen-host-rm-gp104.so`): clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, `22` vGPU types, 50/50 `GRID P4-4Q` split).
   - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
 - **Unified Host & Guest Installation Scripts**:
+  - `scripts/install_proxmox_vgpu_host.sh`: dedicated one-shot Proxmox VE 8/9 host configurator (optional `pve-no-subscription` repo, `proxmox-headers-$(uname -r)`, GRUB & `proxmox-boot-tool` IOMMU setup, VFIO/mdev/`nouveau` blacklist + `update-initramfs`, DKMS `535.309.01` + all 8 clean-room open-source host artifacts, native systemd FastAPI-DLS, and optional `--setup-vms fresh|import-qcow2`).
+  - `scripts/provision_linux_vgpu_guest.sh`: universal multi-distro Linux vGPU guest provisioner supporting **RHEL (8/9/10)**, **AlmaLinux OS (8/9/10)**, **Rocky Linux / Oracle Linux / CentOS Stream / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04 LTS)**, and **Debian (11, 12, 13)**.
   - `scripts/install_open_vgpu.sh`: unified `--role host|guest-linux|guest-windows` installer for the 50/50 vGPU stack.
   - `scripts/install_open_580.sh`: unified `--role host|guest-linux` installer for the bare-metal / PCIe-passthrough `open-580-driver` stack.
-  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + all 6 open host binaries installer for Ubuntu KVM & Proxmox VE 8/9.
+  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + all clean-room open host binaries installer for Ubuntu KVM & Proxmox VE 8/9.
   - `scripts/install_fastapi_dls.sh`: FastAPI-DLS v2 (`docker` or native `systemd`).
   - `scripts/setup_proxmox_vgpu_vms.sh`: Proxmox VE `fresh` & `import-qcow2` VM provisioning (`vm-alma` + `vm-win11`).
   - `scripts/provision_alma_guest.sh`, `scripts/provision_win11_guest.ps1`, and `scripts/templates/win11-autounattend.xml`.

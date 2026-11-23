@@ -35,7 +35,14 @@ sudo bash scripts/install_open_vgpu.sh \
   --with-dls docker \
   --dls-url 192.168.1.24
 
-# Full Host Install (Proxmox VE 8/9 with native systemd FastAPI-DLS)
+# Full Host Install (Proxmox VE 8/9 one-shot host configurator: IOMMU + headers + DKMS + open daemons + systemd FastAPI-DLS + VMs)
+sudo bash scripts/install_proxmox_vgpu_host.sh \
+  --run-file /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
+  --enable-no-subscription-repo \
+  --dls-url <PROXMOX_HOST_IP> \
+  --setup-vms fresh
+
+# Or via unified installer on Proxmox VE 8/9:
 sudo bash scripts/install_open_vgpu.sh \
   --role host \
   --run-file /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
@@ -51,11 +58,10 @@ systemctl status nvidia-vgpud nvidia-vgpu-mgr nvidia-xid-logd
 /opt/nvidia-vgpu-535/open-nvidia-smi vgpu -s
 ```
 
-### 1B. Linux vGPU Guest Installation (`--role guest-linux` on AlmaLinux 10.3 / RHEL 10 / Ubuntu)
-Installs `535.309.01` GRID kernel modules, overlays `620.70.06` Wayland/GBM userspace libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`), configures pure Wayland headless GNOME (`--no-x11 --headless`) + `GSK_RENDERER=ngl` + GNOME Remote Desktop CUDA PTX `8.0` patch (`:3389`), fetches the FastAPI-DLS client token, and optionally installs Docker CE + NVIDIA CDI + Selkies PixelFlux 10-bit 4:4:4:
+### 1B. Multi-Distro Linux vGPU Guest Installation (`scripts/provision_linux_vgpu_guest.sh` — RHEL, AlmaLinux, Rocky, Oracle, CentOS, Ubuntu LTS, Debian)
+Auto-detects `/etc/os-release` across **RHEL 8/9/10**, **AlmaLinux 8/9/10**, **Rocky / Oracle / CentOS / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04)**, and **Debian (11, 12, 13)**; installs `535.309.01` GRID kernel modules, overlays `620.70.06` Wayland/GBM userspace libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`) into `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`, configures pure Wayland headless GNOME (`--no-x11 --headless`) + `GSK_RENDERER=ngl` + GNOME Remote Desktop CUDA PTX `8.0` patch (`:3389`), fetches the FastAPI-DLS client token, builds `libopen-nvidia-encode.so`, and optionally installs Docker + NVIDIA CDI + Selkies PixelFlux 10-bit 4:4:4:
 ```bash
-sudo bash scripts/install_open_vgpu.sh \
-  --role guest-linux \
+sudo bash scripts/provision_linux_vgpu_guest.sh \
   --dls-url https://192.168.1.24 \
   --grid-535-run /path/to/NVIDIA-Linux-x86_64-535.309.01-grid.run \
   --grid-620-run /path/to/NVIDIA-Linux-x86_64-620.70.06-grid.run \

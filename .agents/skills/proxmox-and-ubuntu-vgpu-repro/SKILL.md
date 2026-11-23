@@ -14,7 +14,14 @@ description: >-
 Both distributions run mainline Linux kernels with IOMMU (`intel_iommu=on iommu=pt`) and UEFI/OVMF.
 The installer auto-detects `pveversion` (selecting `proxmox-headers-$(uname -r)` / `pve-headers-$(uname -r)` / `proxmox-default-headers`) vs Ubuntu (`linux-headers-$(uname -r)`), builds `nvidia-vgpu-kvm/535.309.01` under DKMS (`nvidia` + `nvidia-vgpu-vfio`), installs all clean-room open-source host binaries & libraries (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`, `open-nvidia-smi`, `libopen-nvidia-ml.so`, `libopen-nvidia-vgpu.so`, `libopen-host-rm-gp104.so`), wires `OPEN_VGPU_PLUGIN_LIB=/opt/nvidia-vgpu-535/lib/libopen-nvidia-vgpu.so` in `nvidia-vgpu-mgr.service`, cleans stale R580 files, and enables the systemd services:
 ```bash
-# Unified Host + FastAPI-DLS installer:
+# Dedicated One-Shot Proxmox VE 8/9 Host Configurator (IOMMU + headers + DKMS + open daemons + systemd FastAPI-DLS + VMs):
+sudo bash scripts/install_proxmox_vgpu_host.sh \
+  --run-file /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
+  --enable-no-subscription-repo \
+  --dls-url <HOST_IP> \
+  --setup-vms fresh
+
+# Unified Host + FastAPI-DLS installer (Ubuntu KVM or Proxmox VE):
 sudo bash scripts/install_open_vgpu.sh --role host \
   --run-file /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
   --with-dls docker --dls-url <HOST_IP>
@@ -54,10 +61,10 @@ ls /sys/bus/pci/devices/0000:01:00.0/mdev_supported_types/
   ```
 - **Ubuntu KVM native launch**: `sudo bash scripts/start_vgpu_vms.sh`
 
-## 4. Guest Provisioning & Unattended Windows Install
-- **AlmaLinux 10.3** (`535.309.01` kernel + `620.70.06` Wayland/GBM libs, `GSK_RENDERER=ngl`, headless Wayland `--no-x11 --headless`, GRD PTX patch, FastAPI-DLS token, optional Selkies 10-bit 4:4:4):
+## 4. Multi-Distro Linux Guest Provisioning & Unattended Windows Install
+- **Linux Guests — RHEL, AlmaLinux, Rocky, Oracle, CentOS, Ubuntu LTS (20.04–26.04), Debian (11–13)** (`535.309.01` kernel + `620.70.06` Wayland/GBM libs into `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`, `GSK_RENDERER=ngl`, headless Wayland `--no-x11 --headless`, GRD PTX patch, FastAPI-DLS token, `libopen-nvidia-encode.so`, optional Selkies 10-bit 4:4:4):
   ```bash
-  sudo bash scripts/provision_alma_guest.sh \
+  sudo bash scripts/provision_linux_vgpu_guest.sh \
     --dls-url https://<HOST_IP> \
     --grid-535-run /path/to/NVIDIA-Linux-x86_64-535.309.01-grid.run \
     --grid-620-run /path/to/NVIDIA-Linux-x86_64-620.70.06-grid.run \
