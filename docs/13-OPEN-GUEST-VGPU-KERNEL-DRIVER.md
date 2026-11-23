@@ -1,4 +1,4 @@
-# 13 — Tier 2: Open Guest vGPU Kernel Driver (`Phase 2A` Loopback & `Phase 2B-1` `535.309.01` Kbuild)
+# 13 — Tier 2: Open Guest vGPU Kernel Driver (`Phase 2A` Loopback, `Phase 2B-1` `535.309.01` Kbuild & `Phase 2B-2` Live AlmaLinux 10.3 Verification)
 
 ## 1. Objective & Scope Boundary
 
@@ -67,17 +67,49 @@ Compiled from pristine `NVIDIA/open-gpu-kernel-modules@535.309.01` with **zero p
 
 | Artifact | Size (Bytes) | `modinfo` License & Version | Verified Key Symbols (`nm`) |
 | --- | ---: | --- | --- |
-| `src/nvidia/_out/Linux_x86_64/nv-kernel.o` | `10,077,120` | Open RM core (`MIT`) | Links `open_vgpu_bar0_rpc.o` cleanly into `nvidia.ko` |
+| `src/nvidia/_out/Linux_x86_64/nv-kernel.o` | `10,100,080` | Open RM core (`MIT`) | Links `open_vgpu_bar0_rpc.o` cleanly into `nvidia.ko` |
 | `src/nvidia-modeset/_out/Linux_x86_64/nv-modeset-kernel.o` | `2,484,936` | Open modeset core (`MIT`) | Linked into `nvidia-modeset.ko` |
-| `kernel-open/nvidia.ko` | `25,462,400` | `Dual MIT/GPL`, `535.309.01` | `registerHalModule_GP104`, `openVgpuDetectBar0VirtualMode`, `openVgpuCreateObject`, `openVgpuDestructObject`, `openVgpuBar0RpcSendMessage`, `openVgpuBar0RpcRecvPoll`, `openVgpuGetRpc` |
+| `kernel-open/nvidia.ko` | `25,491,064` | `Dual MIT/GPL`, `535.309.01` | `registerHalModule_GP104`, `openVgpuDetectBar0VirtualMode`, `openVgpuCreateObject`, `openVgpuDestructObject`, `openVgpuBar0RpcSendMessage`, `openVgpuBar0RpcRecvPoll`, `openVgpuGetRpc` |
 | `kernel-open/nvidia-modeset.ko` | `3,104,624` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` against open `nvidia.ko` |
 | `kernel-open/nvidia-drm.ko` | `4,505,744` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` on `7.0.0-43-generic` |
 | `kernel-open/nvidia-uvm.ko` | `57,529,720` | `Dual MIT/GPL`, `535.309.01` | Clean `MODPOST` on `7.0.0-43-generic` |
 
 ---
 
-## 5. Phase 2B-2 Next Steps (Live AlmaLinux 10.3 `vm-alma` Deployment & Runtime Verification)
+## 5. What Phase 2B-2 Delivers Today (Live AlmaLinux 10.3 `6.12.0-264.16.1.el10_3.x86_64_v2` Verification on Real Tesla P4 `GRID P4-4Q`)
 
-1. Verify `build_open_535_guest_kmod.sh` compilation against `vm-alma` kernel headers (`6.12.0-264.16.1.el10_3.x86_64_v2`), adding any guarded kernel compatibility shims if needed inside `patch_kernel_open_compat()`.
-2. Deploy the open `nvidia*.ko` build inside an isolated/snapshotted AlmaLinux 10.3 `vm-alma` (`192.168.1.68`) test window, keeping existing guest `nvidia-gridd` licensing and R620 Wayland userspace intact.
-3. Expand [`rpc_vgpu.h`](../open-vgpu-guest/overlay/open_vgpu_bar0_rpc.h) typed RPC wrappers as live `nvidia-smi` / CUDA / GNOME Wayland (`:3389`) bringup exercises additional vGPU guest RM ops (`ALLOC_VIDMEM`, `FILL_PTE_MEM`, `UPDATE_PDE_2`, channel alloc).
+### 5.1 Disposable Copy-on-Write Testbed & In-Guest Compilation
+Live hardware testing was executed inside a temporary disposable copy-on-write QCOW2 overlay (`vm-alma-2b2`, `/var/tmp/vm-alma-2b2.qcow2` backed read-only by `/home/zero/vms/alma/disk.qcow2`) attached to a live Tesla P4 `nvidia-65` (`GRID P4-4Q`, `4096 MiB`) mediated device on `192.168.1.24`:
+- Compiled all four open-source `535.309.01` kernel modules in-guest against AlmaLinux 10.3 kernel **`6.12.0-264.16.1.el10_3.x86_64_v2`** (`GCC 14.4.1`) with zero `.o_binary` blobs (`nv-kernel.o` `9.7 MiB`, `nv-modeset-kernel.o` `2.4 MiB`, `nvidia.ko` `28 MiB`, `nvidia-modeset.ko` `4.1 MiB`, `nvidia-drm.ko` `4.2 MiB`, `nvidia-uvm.ko` `58 MiB`; `ALL_OPEN_535_GUEST_SYMBOLS_VERIFIED!`).
+- Loaded all four open modules (`INSMOD_NVIDIA=OK`, `INSMOD_MODESET=OK`, `INSMOD_DRM=OK`, `INSMOD_UVM=OK`) with `/sys/module/nvidia/version: 535.309.01` and `/sys/module/nvidia/taint: OE` (`Dual MIT/GPL`, zero proprietary `P` taint flag).
+
+### 5.2 Five Hardware BAR0 `0x8f000` `"VRPC"` Protocol Invariants Verified via `rea@6.10.1` + Live `nvidia-vgpu-mgr`
+Live testing against the real host `libnvidia-vgpu.so.535.309.01` combined with targeted `rea@6.10.1` decompilation (`0x261260.c`, `0x261750.c`, `0x262150.c`, `0x1ec920.c`, `0x1e9560.c`, `0x1dfa80.c`, `0x18e7e0.c`, `0x1a2f60.c`) established and verified five critical wire protocol invariants in [`open_vgpu_bar0_rpc.c`](../open-vgpu-guest/overlay/open_vgpu_bar0_rpc.c) and [`patch_open_535_guest_rm.py`](../open-vgpu-guest/scripts/patch_open_535_guest_rm.py):
+
+1. **`GP_IN_RING` (`0x0000080b`) Shared-Memory Ring Descriptor Layout (`_nv007409vgpu` @ `0x261750.c`)**:
+   - Real `libnvidia-vgpu.so.535.309.01` checks bit 11 (`0x800`, `GP_IN_RING`) on `SEND_RING_LO` (`0x8f000`) and `RECV_RING_LO` (`0x8f010`). When programmed with `(pfnLo << 12) | 0x0000080bU` and `0x3ffU` interrupt enable at `0x8f020`, the host reads the 64-bit `msgPage` PTE from `sendRing[0..1]` (`+0x00`), `SEND_PUT` from `sendRing[2]` (`+0x08`), `RECV_PUT` from `recvRing[2]` (`+0x08`), and `RECV_GET` from `recvRing[3]` (`+0x0c`), triggered by writing token `0U` to `0x8f028` (`NV_VGPU_NOTIFY`).
+2. **Clean Ring Invalidation (`0x2f` `UNLOADING_GUEST_DRIVER` + LO-Before-HI Register Clear, `_nv007455vgpu` @ `0x261260.c`)**:
+   - Host MMIO handler `_nv007455vgpu` re-validates the ring whenever `*_RING_LO` still has bit 3 (`VALID = 0x8`) set — even on writes to `*_RING_HI`. Sending RPC `0x2f` (`UNLOADING_GUEST_DRIVER`, 8-byte zero payload) and clearing `*_RING_LO = 0` **before** `*_RING_HI = 0` produces clean `vmiop_log: (0x0): Guest driver unloaded!` across repeated `rmmod`/`insmod` hot-reload cycles without rebooting the guest VM.
+3. **Early `vgpuCreateObject(pGpu)` Hook Before `gpuCreateChildObjects()`**:
+   - `kbusConstructEngine_IMPL` runs during `gpuCreateChildObjects(pGpu, NV_FALSE)` and invokes `GPU_GET_PHYSICAL_RMAPI(pGpu)->Control(NV2080_CTRL_CMD_BUS_GET_PCI_BAR_INFO)`. Calling `vgpuCreateObject(pGpu)` immediately before `gpuCreateChildObjects()` in `gpuConstructPhysical()` ensures the BAR0 VRPC rings and `0x50`/`0x9c` static info caches are active before child engines construct.
+4. **`0x1a` (`RM_API_CONTROL`) `0x40`-Byte Header Framing + `0x20801112` Custom 23-Dword XDR Unpacker + `0x0a`/`0x15` Handle Tracking**:
+   - Host `_nv005240vgpu` (`0x1ec920.c`) requires `pHdr->length == 0x40U` (`sizeof(rpc_message_header_v) + 0x20U` parameter header), with inline control payload copied at `+0x40U` in the shared 4 KiB RPC page.
+   - Host `_nv003641vgpu` (`0x1dfa80.c` `LAB_001e00f3`) packs `NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE` (`0x20801112`) on the wire as `32 x 23` dwords (`0x17` dwords/entry, omitting `pbdmaFaultIds[2]`) followed by `numEntries` at `wire32[0x2e1]` and `bMore` at `wire32[0x2e2]`.
+   - Host `_nv010420vgpu` (`0x18e7e0.c`) requires the exact parent handle `hParent` on `0x0a` (`FREE`, tracked in `OPEN_VGPU_HANDLE_REC[1024]`), and `_nv005308vgpu` (`0x1a2f60.c`) handles `0x15` (`DUP_OBJECT`, `0x18`-byte payload).
+5. **Local Synthesis of GSP-Only `NV2080_CTRL_CMD_INTERNAL_*` Controls Absent on Legacy `535.309.01` Host RM**:
+   - Because legacy non-GSP `535.309.01` host `libnvidia-vgpu.so` rejects GSP-RM internal subdevice controls (`0x20800a*`) with `0xff100001`, `openVgpuRmApiControl()` synthesizes `0x20801803` (`BUS_GET_PCI_BAR_INFO`), `0x20800a36` (`INTERNAL_GPU_GET_CHIP_INFO` with `NV_REG_BASE_GR=0x400000`, `TIMER=0x9000`, `MASTER=0`, `USERMODE=0x810000`), `0x20800a41` (`USER_REGISTER_ACCESS_MAP`), `0x20800a42` (`CONSTRUCTED_FALCON_INFO`), `0x20800a59` (`GMMU_GET_STATIC_INFO`), `0x20800aac` (`BIF_GET_STATIC_INFO`), `0x20800a5c` (`INTR_GET_KERNEL_TABLE`), `0x20800a1c` (`MEMSYS_GET_STATIC_CONFIG`), `0x20800ac5` (`MEMMGR_GET_VGPU_CONFIG_HOST_RESERVED_FB`), `0x20800a61` (`FIFO_GET_NUM_CHANNELS`), and `0x20800a80`/`0x20802609`/`0x2080302c` locally.
+
+### 5.3 Observed Live Execution Milestone & Architectural GSP-RM vs. Legacy Pascal vGPU Boundary
+- **Verified Live Milestone (`vm-alma-2b2` `dmesg` + Host `192.168.1.24` `nvidia-vgpu-mgr`)**:
+  - Guest `dmesg`:
+    - `NVRM: Accepting virtualized Pascal GP104 vGPU guest via clean-room BAR0 VRPC (cfg=0x040882f1)`
+    - `NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64  535.309.01  Release Build`
+  - Host `nvidia-vgpu-mgr`:
+    - `notice: vmiop_log: ######## Guest NVIDIA Driver Information: ########`
+    - `notice: vmiop_log: Driver Version: 535.309.01`
+    - `notice: vmiop_log: vGPU version: 0x120001`
+    - `notice: vmiop_log: (0x0): Guest driver unloaded!` (**zero** `0xff100001` or `0xff100002` VRPC errors on the final build).
+  - Execution completed PCI probe, full BAR0 `"VRPC"` handshake (`0x01`, `0x40`, `0x50` `67,416` B, `0x9c` `31,536` B), `gpuConstructPhysical`, `kbusConstructEngine_IMPL`, `gpuStatePreInit`, `_gpuAllocateInternalObjects` (`0x02` `0xc1e00001`, `0x20` `0xcaf00000`, `0x13` `0xcaf00001`), `_gpuInitChipInfo`, **all of `gpuStateInit`** (advancing past `RmInitNvDevice` line `916` into **`gpuStateLoad` at `RmInitNvDevice` line `945`**), and clean `0x0a` `FREE` + `0x2f` `UNLOADING_GUEST_DRIVER` teardown.
+- **Architectural Boundary in Upstream `NVIDIA/open-gpu-kernel-modules@535.309.01`**:
+  - Upstream `open-gpu-kernel-modules` was engineered exclusively as a **Turing+ (`TU102+`) GSP-client split RM**. Even with `GP104` chip ID registration enabled, its compiled `KernelFifo`, `Intr`, and `KernelGraphics` engine HALs (`intr_tu102.c` `NV_CTRL` subtree/leaf interrupt tree, `kernel_fifo_gv100.c` Volta+ usermode doorbell mapping and GSP channel-count queries, and `kernel_graphics.c`'s 12-control `NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_*` suite) assume a Turing+ GSP-RM firmware backend rather than legacy Pascal `NV_PMC_INTR` + non-GSP vGPU host RM.
+  - Accordingly, production `vm-alma` (`192.168.1.68`) retains the hybrid `R535` kernel + `R620` Wayland userspace stack (with `nvidia-gridd` untouched) for full CUDA 12.2, `Selkies` PixelFlux 10-bit 4:4:4 NVENC, and GNOME 49.5 Wayland RDP stability, while `open-vgpu-guest/` provides the complete, live-verified open-source BAR0 `"VRPC"` guest transport and `535.309.01` RM bridge.

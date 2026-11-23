@@ -225,7 +225,13 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
                 "    // Early detection at GPU creation time should be consistent to the real detection\n"
                 "    NV_ASSERT_OR_RETURN(pGpu->isVirtual == bIsVirtual, NV_ERR_INVALID_STATE);\n"
                 "VGPU_STATIC_INFO *gpuGetStaticInfo(OBJGPU *pGpu)\n{\n\n    return NULL;\n}\n"
+                "GspStaticConfigInfo *gpuGetGspStaticInfo(OBJGPU *pGpu)\n{\n    NV_ASSERT_OR_RETURN(GPU_GET_KERNEL_GSP(pGpu) != NULL, NULL);\n    return &(GPU_GET_KERNEL_GSP(pGpu)->gspStaticInfo);\n}\n"
                 "OBJRPC *gpuGetVgpuRpc(OBJGPU *pGpu)\n{\n    return NULL;\n}\n"
+            ),
+            "src/nvidia/arch/nvalloc/unix/src/osinit.c": (
+                "    nv_firmware_chip_family_t chipFamily;\n"
+                "    nv_priv_t *nvp = NV_GET_NV_PRIV(nv);\n"
+                "    else if (nv->request_fw_client_rm)\n"
             ),
             "src/nvidia/kernel/vgpu/nv/objvgpu.c": (
                 '#include "nvRmReg.h"\n'
@@ -233,14 +239,28 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
                 "void\nvgpuDestructObject\n(\n    OBJGPU *pGpu\n)\n{\n}\n"
             ),
             "src/nvidia/src/kernel/rmapi/rpc_common.c": (
+                '#include "vgpu/vgpu_version.h"\n'
                 "    if (IS_VIRTUAL(pGpu))\n    {\n        // none for now\n    }\n    else if (IS_GSP_CLIENT(pGpu))\n"
+            ),
+            "src/nvidia/kernel/inc/vgpu/rpc.h": (
+                "            NV_ASSERT(IS_GSP_CLIENT(pGpu));\n"
+            ),
+            "src/nvidia/kernel/vgpu/nv/rpc.c": (
+                "    if (IS_GSP_CLIENT(pGpu))\n    {\n        status = _issuePteDescRpc(\n"
             ),
             "src/nvidia/kernel/inc/vgpu/rpc_vgpu.h": (
                 "#ifndef __vgpu_dev_nv_rpc_vgpu_h__\n"
                 "#define __vgpu_dev_nv_rpc_vgpu_h__\n"
+                "static NV_INLINE void NV_RM_RPC_ALLOC_LOCAL_USER(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_ALLOC_VIDMEM(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_ALLOC_VIRTMEM(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_MAP_MEMORY(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_UNMAP_MEMORY(OBJGPU *pGpu, ...) { }\n"
                 "static NV_INLINE void NV_RM_RPC_SET_GUEST_SYSTEM_INFO_EXT(OBJGPU *pGpu, ...) { }\n"
                 "static NV_INLINE void NV_RM_RPC_GET_CONSOLIDATED_STATIC_INFO(OBJGPU *pGpu, ...) { }\n"
                 "static NV_INLINE void NV_RM_RPC_GET_CONSOLIDATED_GR_STATIC_INFO(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_UPDATE_PDE_2(OBJGPU *pGpu, ...) { }\n"
+                "static NV_INLINE void NV_RM_RPC_ALLOC_CONTEXT_DMA(OBJGPU *pGpu, ...) { }\n"
                 "#endif\n"
             ),
         }
@@ -264,7 +284,20 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             self.assertIn("registerHalModule_GP104", first_pass["src/nvidia/generated/g_hal_private.h"])
             self.assertEqual(first_pass["src/nvidia/generated/g_hal_private.h"].count("#if defined(RMCFG_HAL_SETUP_TU102)"), 1)
             self.assertIn("OPEN_VGPU_GP104_GATE", first_pass["src/nvidia/arch/nvalloc/unix/src/osapi.c"])
+            self.assertIn("OPEN_VGPU_GP104_NO_GSP_FW", first_pass["src/nvidia/arch/nvalloc/unix/src/osinit.c"])
+            self.assertIn("!IS_VIRTUAL(pGpu)", first_pass["src/nvidia/arch/nvalloc/unix/src/osinit.c"])
             self.assertIn("openVgpuDetectBar0VirtualMode", first_pass["src/nvidia/src/kernel/gpu/gpu.c"])
+            self.assertIn("openVgpuGetGspStaticInfo", first_pass["src/nvidia/src/kernel/gpu/gpu.c"])
+            self.assertLess(
+                first_pass["src/nvidia/src/kernel/gpu/gpu.c"].index("vgpuCreateObject(pGpu)"),
+                first_pass["src/nvidia/src/kernel/gpu/gpu.c"].index("gpuCreateChildObjects(pGpu"),
+            )
+            self.assertIn("openVgpuRmApiAlloc", first_pass["src/nvidia/src/kernel/rmapi/rpc_common.c"])
+            self.assertIn("openVgpuRmApiFree", first_pass["src/nvidia/src/kernel/rmapi/rpc_common.c"])
+            self.assertIn("openVgpuRmApiDupObject", first_pass["src/nvidia/src/kernel/rmapi/rpc_common.c"])
+            self.assertIn("IS_VIRTUAL(pGpu)", first_pass["src/nvidia/kernel/inc/vgpu/rpc.h"])
+            self.assertIn("IS_VIRTUAL(pGpu)", first_pass["src/nvidia/kernel/vgpu/nv/rpc.c"])
+            self.assertIn("openVgpuRpcAllocVidmem", first_pass["src/nvidia/kernel/inc/vgpu/rpc_vgpu.h"])
             self.assertIn("open_vgpu_bar0_rpc.c", first_pass["src/nvidia/srcs.mk"])
             self.assertTrue((src_root / "src/nvidia/kernel/inc/vgpu/open_vgpu_bar0_rpc.h").is_file())
             self.assertTrue((src_root / "src/nvidia/kernel/vgpu/nv/open_vgpu_bar0_rpc.c").is_file())

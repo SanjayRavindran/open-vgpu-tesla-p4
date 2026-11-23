@@ -171,7 +171,7 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
     _replace_required(
         gpu_c,
         "    // create remaining gpu offspring\n    rmStatus = gpuCreateChildObjects(pGpu, /* bConstructEarly */ NV_FALSE);\n    if (rmStatus != NV_OK)\n        return rmStatus;",
-        "    // create remaining gpu offspring\n    rmStatus = gpuCreateChildObjects(pGpu, /* bConstructEarly */ NV_FALSE);\n    if (rmStatus != NV_OK)\n        return rmStatus;\n\n    if (IS_VIRTUAL(pGpu))\n    {\n        NV_ASSERT_OK_OR_RETURN(vgpuCreateObject(pGpu));\n    }",
+        "    if (IS_VIRTUAL(pGpu))\n    {\n        NV_ASSERT_OK_OR_RETURN(vgpuCreateObject(pGpu));\n    }\n\n    // create remaining gpu offspring\n    rmStatus = gpuCreateChildObjects(pGpu, /* bConstructEarly */ NV_FALSE);\n    if (rmStatus != NV_OK)\n        return rmStatus;",
         guard_substring="NV_ASSERT_OK_OR_RETURN(vgpuCreateObject(pGpu));",
     )
     _replace_required(
@@ -194,9 +194,51 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
     )
     _replace_required(
         gpu_c,
+        "GspStaticConfigInfo *gpuGetGspStaticInfo(OBJGPU *pGpu)\n{\n    NV_ASSERT_OR_RETURN(GPU_GET_KERNEL_GSP(pGpu) != NULL, NULL);\n    return &(GPU_GET_KERNEL_GSP(pGpu)->gspStaticInfo);\n}",
+        "GspStaticConfigInfo *gpuGetGspStaticInfo(OBJGPU *pGpu)\n{\n    if (IS_VIRTUAL(pGpu))\n    {\n        return openVgpuGetGspStaticInfo(pGpu);\n    }\n    NV_ASSERT_OR_RETURN(GPU_GET_KERNEL_GSP(pGpu) != NULL, NULL);\n    return &(GPU_GET_KERNEL_GSP(pGpu)->gspStaticInfo);\n}",
+        guard_substring="openVgpuGetGspStaticInfo(pGpu)",
+    )
+    _replace_required(
+        gpu_c,
         "OBJRPC *gpuGetVgpuRpc(OBJGPU *pGpu)\n{\n    return NULL;\n}",
         "OBJRPC *gpuGetVgpuRpc(OBJGPU *pGpu)\n{\n    return openVgpuGetRpc(pGpu);\n}",
         guard_substring="openVgpuGetRpc(pGpu)",
+    )
+
+    osinit_c = nv_dir / "arch" / "nvalloc" / "unix" / "src" / "osinit.c"
+    _replace_required(
+        osinit_c,
+        "    nv_firmware_chip_family_t chipFamily;\n    nv_priv_t *nvp = NV_GET_NV_PRIV(nv);",
+        "    nv_firmware_chip_family_t chipFamily;\n"
+        "    nv_priv_t *nvp = NV_GET_NV_PRIV(nv);\n\n"
+        "    if ((nvp != NULL) && ((nvp->pmc_boot_0 & 0x1ff00000U) == 0x13400000U) && (nv->regs != NULL))\n"
+        "    {\n"
+        "        GPUHWREG *vgpu_map = osMapKernelSpace(nv->regs->cpu_address + 0x8f000ULL,\n"
+        "                                              os_page_size,\n"
+        "                                              NV_MEMORY_UNCACHED,\n"
+        "                                              NV_PROTECT_READABLE);\n"
+        "        NvU32 vgpu_cfg = 0U;\n"
+        "        if (vgpu_map != NULL)\n"
+        "        {\n"
+        "            vgpu_cfg = NV_PRIV_REG_RD32(vgpu_map, 0x20U);\n"
+        "            osUnmapKernelSpace(vgpu_map, os_page_size);\n"
+        "        }\n"
+        "        if ((vgpu_cfg != 0xffffffffU) && ((vgpu_cfg & 1U) != 0U))\n"
+        "        {\n"
+        "            /* OPEN_VGPU_GP104_NO_GSP_FW: GP104 vGPU guest uses BAR0 VRPC instead of GSP firmware */\n"
+        "            portMemSet(pGspFw, 0, sizeof(*pGspFw));\n"
+        "            nv->request_firmware = NV_FALSE;\n"
+        "            nv->request_fw_client_rm = NV_FALSE;\n"
+        "            return NV_OK;\n"
+        "        }\n"
+        "    }",
+        guard_substring="OPEN_VGPU_GP104_NO_GSP_FW",
+    )
+    _replace_required(
+        osinit_c,
+        "    else if (nv->request_fw_client_rm)\n",
+        "    else if (nv->request_fw_client_rm && !IS_VIRTUAL(pGpu))\n",
+        guard_substring="else if (nv->request_fw_client_rm && !IS_VIRTUAL(pGpu))",
     )
 
     objvgpu_c = nv_dir / "kernel" / "vgpu" / "nv" / "objvgpu.c"
@@ -222,9 +264,41 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
     rpc_common_c = nv_dir / "src" / "kernel" / "rmapi" / "rpc_common.c"
     _replace_required(
         rpc_common_c,
+        '#include "vgpu/vgpu_version.h"',
+        '#include "vgpu/vgpu_version.h"\n#include "vgpu/open_vgpu_bar0_rpc.h"',
+        guard_substring="open_vgpu_bar0_rpc.h",
+    )
+    _replace_required(
+        rpc_common_c,
         "    if (IS_VIRTUAL(pGpu))\n    {\n        // none for now\n    }\n    else if (IS_GSP_CLIENT(pGpu))",
-        "    if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))",
-        guard_substring="if (IS_VIRTUAL(pGpu) || IS_GSP_CLIENT(pGpu))",
+        "    if (IS_VIRTUAL(pGpu))\n"
+        "    {\n"
+        "        pRmApi->Control         = openVgpuRmApiControl;\n"
+        "        pRmApi->AllocWithHandle = openVgpuRmApiAlloc;\n"
+        "        pRmApi->Free            = openVgpuRmApiFree;\n"
+        "        pRmApi->DupObject       = openVgpuRmApiDupObject;\n"
+        "    }\n"
+        "    else if (IS_GSP_CLIENT(pGpu))",
+        guard_substring="openVgpuRmApiControl",
+    )
+
+    rpc_h = nv_dir / "kernel" / "inc" / "vgpu" / "rpc.h"
+    rpc_h_txt = rpc_h.read_text(encoding="utf-8")
+    if "NV_ASSERT(IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu));" not in rpc_h_txt:
+        if "NV_ASSERT(IS_GSP_CLIENT(pGpu));" not in rpc_h_txt:
+            raise RuntimeError(f"Expected anchor not found in {rpc_h}: NV_ASSERT(IS_GSP_CLIENT(pGpu));")
+        rpc_h_txt = rpc_h_txt.replace(
+            "NV_ASSERT(IS_GSP_CLIENT(pGpu));",
+            "NV_ASSERT(IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu));",
+        )
+        rpc_h.write_text(rpc_h_txt, encoding="utf-8")
+
+    rpc_c = nv_dir / "kernel" / "vgpu" / "nv" / "rpc.c"
+    _replace_required(
+        rpc_c,
+        "    if (IS_GSP_CLIENT(pGpu))\n    {\n        status = _issuePteDescRpc(",
+        "    if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))\n    {\n        status = _issuePteDescRpc(",
+        guard_substring="if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))\n    {\n        status = _issuePteDescRpc(",
     )
 
     rpc_vgpu_h = nv_dir / "kernel" / "inc" / "vgpu" / "rpc_vgpu.h"
@@ -233,6 +307,42 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
         rpc_txt = rpc_txt.replace(
             "#define __vgpu_dev_nv_rpc_vgpu_h__",
             '#define __vgpu_dev_nv_rpc_vgpu_h__\n\n#include "nvVer.h"\n#include "vgpu/open_vgpu_bar0_rpc.h"',
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_ALLOC_LOCAL_USER(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_ALLOC_LOCAL_USER(pGpu, hClient, hParent, hMemory, pMemDesc, trueLength, attr, attr2, format, status) \\\n"
+            "    do { status = openVgpuRpcAllocLocalUser((pGpu), (hClient), (hParent), (hMemory), (pMemDesc), (trueLength), (attr), (attr2), (format)); } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_ALLOC_VIDMEM(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_ALLOC_VIDMEM(pGpu, hClient, hParent, hMemory, pMemDesc, size, attr, attr2, type, flags, height, width, format, comprCovg, zcullCovg, alignment, pitch, ctagOffset, status) \\\n"
+            "    do { \\\n"
+            "        (void)(height); (void)(width); (void)(zcullCovg); (void)(alignment); (void)(pitch); (void)(ctagOffset); \\\n"
+            "        status = openVgpuRpcAllocVidmem((pGpu), (hClient), (hParent), (hMemory), (pMemDesc), (size), (attr), (attr2), (type), (flags), (format), (comprCovg)); \\\n"
+            "    } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_ALLOC_VIRTMEM(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_ALLOC_VIRTMEM(pGpu, hClient, hParent, hVASpace, hMemory, pOffset, size, attr, attr2, type, flags, height, width, format, comprCovg, zcullCovg, rangeLo, rangeHi, alignment, status) \\\n"
+            "    do { \\\n"
+            "        (void)(attr); (void)(attr2); (void)(height); (void)(width); (void)(format); (void)(comprCovg); (void)(zcullCovg); (void)(rangeLo); (void)(rangeHi); \\\n"
+            "        status = openVgpuRpcAllocVirtmem((pGpu), (hClient), (hParent), (hVASpace), (hMemory), (pOffset), (size), (type), (flags), (alignment)); \\\n"
+            "    } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_MAP_MEMORY(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_MAP_MEMORY(pGpu, hClient, hDevice, hMemory, offset, length, flags, pApertureOffset, status) \\\n"
+            "    do { status = openVgpuRpcMapMemory((pGpu), (hClient), (hDevice), (hMemory), (offset), (length), (flags), (pApertureOffset)); } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_UNMAP_MEMORY(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_UNMAP_MEMORY(pGpu, hClient, hDevice, hMemory, flags, apertureOffset, status) \\\n"
+            "    do { status = openVgpuRpcUnmapMemory((pGpu), (hClient), (hDevice), (hMemory), (flags), (apertureOffset)); } while (0)",
             1,
         )
         rpc_txt = rpc_txt.replace(
@@ -251,6 +361,18 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
             "static NV_INLINE void NV_RM_RPC_GET_CONSOLIDATED_GR_STATIC_INFO(OBJGPU *pGpu, ...) { }",
             "#define NV_RM_RPC_GET_CONSOLIDATED_GR_STATIC_INFO(pGpu, status) \\\n"
             "    do { status = openVgpuRpcGetConsolidatedGrStaticInfo((pGpu), GPU_GET_RPC(pGpu)); } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_UPDATE_PDE_2(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_UPDATE_PDE_2(pGpu, hClient, hDevice, pParams, status) \\\n"
+            "    do { status = openVgpuRpcUpdatePde2((pGpu), (hClient), (hDevice), (pParams), (NvU32)sizeof(*(pParams))); } while (0)",
+            1,
+        )
+        rpc_txt = rpc_txt.replace(
+            "static NV_INLINE void NV_RM_RPC_ALLOC_CONTEXT_DMA(OBJGPU *pGpu, ...) { }",
+            "#define NV_RM_RPC_ALLOC_CONTEXT_DMA(pGpu, hClient, hDevice, hDma, hClass, flags, hMemory, offset, limit, status) \\\n"
+            "    do { status = openVgpuRpcAllocContextDma((pGpu), (hClient), (hDevice), (hDma), (hClass), (flags), (hMemory), (offset), (limit)); } while (0)",
             1,
         )
         rpc_vgpu_h.write_text(rpc_txt, encoding="utf-8")
