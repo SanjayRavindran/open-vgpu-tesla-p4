@@ -52,6 +52,11 @@ open-nvenc/libnvidia-encode.so.1
 open-nvenc/test_nvenc_unit
 open-host-rm/libopen-host-rm-gp104.so
 open-host-rm/test_open_host_rm_unit
+open-gridd/build/
+open-gridd/build-pkg/
+open-gridd/nvidia-gridd
+open-gridd/c_unit_tests
+open-gridd/c_e2e_tests
 
 # Rust / Python artifacts
 nova-vgpu/target/

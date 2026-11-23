@@ -29,7 +29,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r)
+          sudo apt-get install -y build-essential cmake libssl-dev python3-cryptography linux-headers-$(uname -r)
 
       - name: Run Python Unit & Hygiene Tests
         run: |
@@ -41,13 +41,20 @@ jobs:
           cargo test --all-targets --verbose
           cargo build --bins --verbose
 
-      - name: Build & Test Open C Daemons (libopen-vgxcfg, open-xid-logd, open-vgpu-mgr, open-nvml-smi, open-vgpu-plugin)
+      - name: Build & Test Open C Daemons (libopen-vgxcfg, open-xid-logd, open-vgpu-mgr, open-nvml-smi, open-vgpu-plugin, open-vgpu-guest, open-nvenc, open-host-rm)
         run: |
           make -C open-vgxcfg clean all test clean
           make -C open-xid-logd clean all test clean
           make -C open-vgpu-mgr clean all test clean
           make -C open-nvml-smi clean all test clean
           make -C open-vgpu-plugin clean all test clean
+          make -C open-vgpu-guest clean all test clean
+          make -C open-nvenc clean all test clean
+          make -C open-host-rm clean all test clean
+
+      - name: Build & Test Clean-Room open-gridd
+        run: |
+          make -C open-gridd clean all test clean
 
       - name: Build Guest C Smoke Binary & Check Kmod Syntax
         run: |

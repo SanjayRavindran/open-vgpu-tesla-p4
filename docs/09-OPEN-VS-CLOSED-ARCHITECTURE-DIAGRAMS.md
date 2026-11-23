@@ -6,7 +6,7 @@ This document visualizes how clean-room open-source components, upstream open-so
 
 | Class | Meaning | Examples |
 | :--- | :--- | :--- |
-| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), `open-nvidia-vgpu-mgr` (C), `open-nvidia-smi` + `libopen-nvidia-ml.so` (C), `libopen-nvidia-vgpu.so` (C), `open-vgpu-guest` + `nova_vgpu_guest.ko` (C), `libopen-nvidia-encode.so` (C), `libopen-host-rm-gp104.so` (C), provisioning & PTX patch scripts |
+| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), `open-nvidia-vgpu-mgr` (C), `open-nvidia-smi` + `libopen-nvidia-ml.so` (C), `libopen-nvidia-vgpu.so` (C), `open-vgpu-guest` + `nova_vgpu_guest.ko` (C), `libopen-nvidia-encode.so` (C), `libopen-host-rm-gp104.so` (C), `open-gridd` (`nvidia-gridd`, C11), provisioning & PTX patch scripts |
 | Blue | **Upstream Open Source** | Linux KVM/VFIO/mdev, QEMU/OVMF/`swtpm`, FastAPI-DLS, GNOME 49.5, FreeRDP, Docker/Selkies, NVIDIA MIT/GPL kernel shims & R620 Wayland shims |
 | Red / Orange | **Closed Source (NVIDIA Proprietary)** | `nv-kernel.o_binary`, `libnvidia-vgpu.so`, signed Falcon blobs (`PrivSec=1`), Guest `nvlddmkm.sys` & `libcuda` |
 | Slate | **Closed Source OS / Client** | Windows 11 24H2 Kernel, DWM, `TermService` (`:3389`) |
@@ -102,9 +102,9 @@ flowchart TB
 
     subgraph AL_USR["Hybrid Userspace Driver Stack (R620 Wayland + R535 Core)"]
         EGL_WL["Open R620 Shims: libnvidia-egl-wayland, wayland2, gbm"]:::oss
-        NV_GL["Closed R535 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda, libnvidia-encode"]:::closed
-        GRIDD["nvidia-gridd (GRID Licensing Daemon -> /etc/nvidia/ClientConfigToken/)"]:::closed
-        AL_PROV["provision_alma_guest.sh (Open setup automation)"]:::ours
+        NV_GL["Closed R535 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda"]:::closed
+        GRIDD["open-gridd (Clean-Room C11 NLS/DLS Daemon -> FastAPI-DLS :443)"]:::ours
+        AL_PROV["provision_linux_vgpu_guest.sh (Open setup automation)"]:::ours
     end
 
     subgraph AL_KRN["AlmaLinux 10.3 Guest Kernel & Virtual vGPU Hardware"]
@@ -211,6 +211,7 @@ sequenceDiagram
 | `libopen-host-rm-gp104.so` | Host RM HAL Slice | **Ours** | Open (C, `open-host-rm/`) | Category #1 signed Falcon WPR1/ACR LSF header builder (`8/8` Falcons), `NV_PMC_ENABLE`/BAR1/BAR2 bringup, `22` vGPU profiles, 50/50 `GRID P4-4Q` (`2×2048` CHID) split |
 | `open-vgpu-guest` / `nova_vgpu_guest.ko` | Linux Guest Kernel | **Ours** | Open (C, `Dual MIT/GPL`) | BAR0 `0x8f000` `"VRPC"` guest transport (`GP_IN_RING` `0x80b`) + zero-blob `open-gpu-kernel-modules@535.309.01` `nvidia*.ko` overlay |
 | `libopen-nvidia-encode.so` | Linux Guest Userspace | **Ours** | Open (C, `libnvidia-encode.so.1`) | Clean-room NVENC 12.1 userspace library (`10/10` exports, `43/43` function slots, `45/45` `NvTool` API names, GP104 H.264/HEVC 10-bit 4:4:4 + `0xc0b7` RM bridge) |
+| `open-gridd` | Linux Guest Userspace | **Ours** | Open (C11, OpenSSL 3.x) | Clean-room Linux NLS/DLS licensing daemon (`/usr/bin/nvidia-gridd`): RSA-2048 JWT `.tok` check, PKCE auth, AES-256-GCM store, RM `0x20808161`/`0x20800187` status, live FastAPI-DLS verified |
 | `FastAPI-DLS` | Host Service | Upstream Open | Open (Python/Docker/systemd) | Issues TLS licensing tokens & leases (`192.168.1.24:443`) |
 | `nvidia-vgpu-vfio.ko` | Host Kernel | NVIDIA / DKMS | Open (MIT C) | KVM/VFIO `mdev` lifecycle and BAR0/VRPC trap forwarding |
 | `nvidia.ko` (`nv-kernel.o_binary`) | Host Kernel | NVIDIA Proprietary | Open OS shim + Closed core | Non-GSP Pascal physical silicon state machine, embedded Category #1 signed Falcon execution, channel scheduling |

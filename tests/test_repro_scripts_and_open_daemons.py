@@ -109,6 +109,14 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-host-rm" / "open_host_rm_gp104.c",
             ROOT / "open-host-rm" / "test_open_host_rm_unit.c",
             ROOT / "open-host-rm" / "Makefile",
+            ROOT / "open-gridd" / "CMakeLists.txt",
+            ROOT / "open-gridd" / "Makefile",
+            ROOT / "open-gridd" / "src" / "main.c",
+            ROOT / "open-gridd" / "src" / "nls_client.c",
+            ROOT / "open-gridd" / "src" / "rm_client.c",
+            ROOT / "open-gridd" / "src" / "token.c",
+            ROOT / "open-gridd" / "src" / "trusted_store.c",
+            ROOT / "open-gridd" / "tests" / "test_c_static_audit.py",
             ROOT / "docs" / "12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md",
             ROOT / "docs" / "13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
@@ -116,6 +124,8 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
         ]
         for p in required_files:
             self.assertTrue(p.is_file(), f"Missing open daemon source: {p}")
+        self.assertFalse((ROOT / "open-gridd" / "nvidia-gridd").exists(), "Proprietary binary must not be tracked")
+        self.assertFalse((ROOT / "open-gridd" / "decompiled").exists(), "Decompiled vendor dumps must not be tracked")
 
     def test_win11_autounattend_template_valid_and_no_secrets(self):
         tmpl = ROOT / "scripts" / "templates" / "win11-autounattend.xml"
@@ -197,7 +207,7 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
                 "--dry-run",
             ],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "rhel", "--dry-run", "--with-selkies"],
-            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "almalinux", "--dry-run", "--with-selkies"],
+            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "almalinux", "--dry-run", "--with-selkies", "--with-open-gridd"],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "rocky", "--dry-run", "--with-selkies"],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "ubuntu", "--dry-run", "--with-selkies"],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "debian", "--dry-run", "--with-selkies"],

@@ -1,0 +1,14 @@
+[Unit]
+Description=NVIDIA vGPU / GRID Licensing Daemon (Clean-Room Implementation)
+After=syslog.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=/var/run/nvidia-gridd/nvidia-gridd.pid
+ExecStart=/usr/sbin/nvidia-gridd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,7 @@ Use this track to partition a single Tesla P4 into **two concurrent `GRID P4-4Q`
 8. **`open-vgpu-guest` & `nova_vgpu_guest.ko`** (`C`, `open-vgpu-guest/`, `kmods/nova_vgpu_guest/`) — Clean-room guest BAR0 `0x8f000` `"VRPC"` client & zero-blob `open-gpu-kernel-modules@535.309.01` `nvidia*.ko` overlay
 9. **`libopen-nvidia-encode.so`** (`C`, `open-nvenc/`) — Clean-room NVENC 12.1 userspace library (`libnvidia-encode.so.1` SONAME, `10/10` exports, `43/43` function slots, GP104 H.264/HEVC 10-bit 4:4:4)
 10. **`libopen-host-rm-gp104.so`** (`C`, `open-host-rm/`) — Clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `22` vGPU profiles, 50/50 `GRID P4-4Q` split)
+11. **`open-gridd`** (`C11`, `open-gridd/`) — Clean-room Linux NLS/DLS licensing daemon (`/usr/bin/nvidia-gridd`, OpenSSL 3.x), replacing the `5.31 MiB` vendor `nvidia-gridd` binary and verified live on `vm-alma` against FastAPI-DLS (`https://192.168.1.24:443`)
 
 ### 1A. Hypervisor Host Installation (`--role host` on Ubuntu KVM or Proxmox VE 8/9)
 ```bash
@@ -59,7 +60,7 @@ systemctl status nvidia-vgpud nvidia-vgpu-mgr nvidia-xid-logd
 ```
 
 ### 1B. Multi-Distro Linux vGPU Guest Installation (`scripts/provision_linux_vgpu_guest.sh` — RHEL, AlmaLinux, Rocky, Oracle, CentOS, Ubuntu LTS, Debian)
-Auto-detects `/etc/os-release` across **RHEL 8/9/10**, **AlmaLinux 8/9/10**, **Rocky / Oracle / CentOS / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04)**, and **Debian (11, 12, 13)**; installs `535.309.01` GRID kernel modules, overlays `620.70.06` Wayland/GBM userspace libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`) into `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`, configures pure Wayland headless GNOME (`--no-x11 --headless`) + `GSK_RENDERER=ngl` + GNOME Remote Desktop CUDA PTX `8.0` patch (`:3389`), fetches the FastAPI-DLS client token, builds `libopen-nvidia-encode.so`, and optionally installs Docker + NVIDIA CDI + Selkies PixelFlux 10-bit 4:4:4:
+Auto-detects `/etc/os-release` across **RHEL 8/9/10**, **AlmaLinux 8/9/10**, **Rocky / Oracle / CentOS / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04)**, and **Debian (11, 12, 13)**; installs `535.309.01` GRID kernel modules, overlays `620.70.06` Wayland/GBM userspace libraries (`libnvidia-egl-gbm`, `libnvidia-egl-wayland`, `libnvidia-egl-wayland2`, `nvidia-drm_gbm.so`) into `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`, configures pure Wayland headless GNOME (`--no-x11 --headless`) + `GSK_RENDERER=ngl` + GNOME Remote Desktop CUDA PTX `8.0` patch (`:3389`), fetches the FastAPI-DLS client token, builds `libopen-nvidia-encode.so`, and optionally builds/installs clean-room `open-gridd` (`--with-open-gridd`) + Docker/NVIDIA CDI/Selkies PixelFlux 10-bit 4:4:4 (`--with-selkies`):
 ```bash
 sudo bash scripts/provision_linux_vgpu_guest.sh \
   --dls-url https://192.168.1.24 \
@@ -67,6 +68,7 @@ sudo bash scripts/provision_linux_vgpu_guest.sh \
   --grid-620-run /path/to/NVIDIA-Linux-x86_64-620.70.06-grid.run \
   --rdp-user zero \
   --rdp-pass '<YOUR_RDP_PASSWORD>' \
+  --with-open-gridd \
   --with-selkies
 ```
 

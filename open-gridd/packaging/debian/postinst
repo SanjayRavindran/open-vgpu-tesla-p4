@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+mkdir -p \
+    /etc/nvidia \
+    /etc/nvidia/ClientConfigToken \
+    /etc/nvidia/license \
+    /etc/nvidia/vGPULicense \
+    /var/lib/nvidia/vGPULicensing \
+    /var/lib/nvidia/GridLicensing
+
+if [ ! -f /etc/nvidia/gridd.conf ] && [ -f /usr/share/nvidia/gridd.conf.template ]; then
+    cp /usr/share/nvidia/gridd.conf.template /etc/nvidia/gridd.conf
+    chmod 0644 /etc/nvidia/gridd.conf
+fi
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi

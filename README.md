@@ -23,6 +23,7 @@ A dedicated, **100% open-source** clean-room Rust + Linux kernel vGPU research s
 | [`open-vgpu-guest/`](./open-vgpu-guest/Makefile) | `MIT` / `GPL-2.0` | Clean-room guest BAR0 `0x8f000` `"VRPC"` client (`open_vgpu_guest_rpc.{h,c}`), `59`-VRPC zero-blob host↔guest loopback test, and `NVIDIA/open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC overlay (`overlay/open_vgpu_bar0_rpc.{h,c}`, `scripts/patch_open_535_guest_rm.py`, `scripts/build_open_535_guest_kmod.sh`). |
 | [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`) implementing all `10/10` ELF exports, `43/43` `NV_ENCODE_API_FUNCTION_LIST` slots, `45/45` `NvTool` API names, Pascal GP104 H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `/dev/nvidiactl` `NVC0B7_VIDEO_ENCODER` (`0xc0b7`) RM bridge. |
 | [`open-host-rm/`](./open-host-rm/Makefile) | `MIT` | Clean-room C `libopen-host-rm-gp104.so` Tier 2B host GP104 physical RM HAL slice (Category #1 signed Falcon WPR1/ACR LSF header builder for `8/8` Falcons, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, and `22`-profile Tesla P4 vGPU / 50-50 `GRID P4-4Q` `2×2048` CHID partitioner). |
+| [`open-gridd/`](./open-gridd/CMakeLists.txt) | `MIT` | Clean-room C11 + OpenSSL 3.x Linux vGPU / NLS licensing daemon (`open-gridd` -> `/usr/bin/nvidia-gridd`), replacing the `5.31 MiB` proprietary `nvidia-gridd` binary with RSA-2048 `.tok` JWT verification, PKCE auth, AES-256-GCM trusted store, `/dev/nvidiactl` RM license controls, and live FastAPI-DLS leasing verified on `vm-alma`. |
 | [`evidence/vgpu-535-rea610/`](./evidence/vgpu-535-rea610/rea_doctor.json) | Clean-room JSON | Machine-readable `rea@6.10.1` (`Ghidra 12.2`) static analysis, binary layout, native exports, release exposure, and decompilation summaries for `535.309.01` host & guest binaries. |
 | [`kmods/nova_vgpu_mdev/`](./kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) | `GPL-2.0` | Linux `7.0+` host `vfio-mdev` PCI mediator (`vfio_dma_rw`, MSI/INTx `eventfd_signal`, `16 MiB` BAR1 `mmap`). |
 | [`kmods/nova_vgpu_guest/`](./kmods/nova_vgpu_guest/nova_vgpu_guest.c) | `GPL-2.0` | Linux `7.0+` open-source vGPU guest PCI driver (`0x8f000` BAR0/`"VRPC"` shared rings, `GP_IN_RING` `0x80b`, LO-before-HI teardown) + [`test_guest_ioctl.c`](./kmods/nova_vgpu_guest/test_guest_ioctl.c). |
@@ -97,7 +98,7 @@ Full side-by-side R620 comparison and root causes are in [`docs/06-LIMITATIONS-R
 # Rust open-nvidia-vgpud + RM ioctl unit tests
 (cd nova-vgpu && cargo test --all-targets)
 
-# All 8 clean-room C host & guest component test suites
+# All 9 clean-room C host & guest component test suites
 make -C open-vgxcfg clean all test
 make -C open-xid-logd clean all test
 make -C open-vgpu-mgr clean all test
@@ -106,6 +107,7 @@ make -C open-vgpu-plugin clean all test
 make -C open-vgpu-guest clean all test
 make -C open-nvenc clean all test
 make -C open-host-rm clean all test
+make -C open-gridd clean all test
 
 # Repository hygiene, patcher idempotency, REA evidence & script dry-run tests
 python3 -m unittest discover -s tests -v
@@ -142,6 +144,7 @@ All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin,
   - `open-vgpu-guest` + `kmods/nova_vgpu_guest`: clean-room guest BAR0 `0x8f000` `"VRPC"` client (`59`-VRPC zero-blob host↔guest loopback), `nova_vgpu_guest.ko`, and `NVIDIA/open-gpu-kernel-modules@535.309.01` zero-blob guest `nvidia*.ko` (`Dual MIT/GPL`, `taint: OE`) overlay.
   - `open-nvenc` (`libopen-nvidia-encode.so` / `libnvidia-encode.so.1`): clean-room NVENC 12.1 userspace library (`10/10` exports, `43/43` function slots, `45/45` `NvTool` names, GP104 H.264/HEVC 10-bit 4:4:4 + `/dev/nvidiactl` `0xc0b7` RM bridge).
   - `open-host-rm` (`libopen-host-rm-gp104.so`): clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, `22` vGPU types, 50/50 `GRID P4-4Q` split).
+  - `open-gridd` (`nvidia-gridd`, C11 + OpenSSL 3.x): clean-room Linux NLS/DLS licensing daemon replacing vendor `nvidia-gridd` (`112 KiB` vs. `5.31 MiB`), live-verified via `systemd` against FastAPI-DLS (`https://192.168.1.24:443`) on AlmaLinux 10.3 `GRID P4-4Q` (`License Status : Licensed`).
   - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
 - **Unified Host & Guest Installation Scripts**:
   - `scripts/install_proxmox_vgpu_host.sh`: dedicated one-shot Proxmox VE 8/9 host configurator (optional `pve-no-subscription` repo, `proxmox-headers-$(uname -r)`, GRUB & `proxmox-boot-tool` IOMMU setup, VFIO/mdev/`nouveau` blacklist + `update-initramfs`, DKMS `535.309.01` + all 8 clean-room open-source host artifacts, native systemd FastAPI-DLS, and optional `--setup-vms fresh|import-qcow2`).

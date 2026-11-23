@@ -25,6 +25,7 @@ RDP_PASS="${RDP_PASS:-}"
 DISTRO_OVERRIDE=""
 WITH_SELKIES=0
 WITH_OPEN_GUEST_KMOD=0
+WITH_OPEN_GRIDD=0
 DRY_RUN=0
 
 usage() {
@@ -45,6 +46,7 @@ Options:
   --distro <id>            Override detected distro ID (e.g. rhel, almalinux, rocky, ol, centos, ubuntu, debian)
   --with-selkies           Also configure Docker + NVIDIA Container Toolkit (CDI) + Selkies PixelFlux 10-bit 4:4:4
   --with-open-guest-kmod   Also compile open-gpu-kernel-modules@535.309.01 GP104 BAR0 VRPC guest modules & libopen-nvidia-encode.so
+  --with-open-gridd        Also build and install clean-room open-gridd (OpenSSL 3.x C11) to replace vendor /usr/bin/nvidia-gridd
   --dry-run                Print planned distro-specific steps without modifying the system
   -h, --help               Show this help text
 EOF
@@ -60,6 +62,7 @@ while [ $# -gt 0 ]; do
     --distro) DISTRO_OVERRIDE="${2:-}"; shift 2 ;;
     --with-selkies) WITH_SELKIES=1; shift ;;
     --with-open-guest-kmod) WITH_OPEN_GUEST_KMOD=1; shift ;;
+    --with-open-gridd) WITH_OPEN_GRIDD=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -138,6 +141,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   fi
   if [ "$WITH_OPEN_GUEST_KMOD" -eq 1 ]; then
     echo "[dry-run] 8. Build open-gpu-kernel-modules@535.309.01 GP104 BAR0 VRPC guest modules & libopen-nvidia-encode.so"
+  fi
+  if [ "$WITH_OPEN_GRIDD" -eq 1 ]; then
+    echo "[dry-run] 9. Build & install clean-room open-gridd (backing up vendor /usr/bin/nvidia-gridd -> .vendor.bak)"
   fi
   exit 0
 fi
@@ -342,6 +348,28 @@ fi
 
 if [ "$WITH_OPEN_GUEST_KMOD" -eq 1 ] && [ -f "$REPO_ROOT/open-vgpu-guest/scripts/build_open_535_guest_kmod.sh" ]; then
   bash "$REPO_ROOT/open-vgpu-guest/scripts/build_open_535_guest_kmod.sh" --workdir /tmp/open-535-guest-build --kver "$KVER"
+fi
+
+if [ "$WITH_OPEN_GRIDD" -eq 1 ] && [ -d "$REPO_ROOT/open-gridd" ]; then
+  if [ "$DISTRO_FAMILY" = "debian" ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake libssl-dev || true
+  else
+    "$PKG_MGR" install -y -q cmake openssl-devel || true
+  fi
+  if [ -f /usr/bin/nvidia-gridd ] && [ ! -f /usr/bin/nvidia-gridd.vendor.bak ]; then
+    cp -a /usr/bin/nvidia-gridd /usr/bin/nvidia-gridd.vendor.bak
+  fi
+  if command -v cmake >/dev/null 2>&1; then
+    make -C "$REPO_ROOT/open-gridd" clean all
+    install -m 0755 "$REPO_ROOT/open-gridd/build/nvidia-gridd" /usr/bin/nvidia-gridd
+    make -C "$REPO_ROOT/open-gridd" clean
+  else
+    gcc -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -I"$REPO_ROOT/open-gridd/include" \
+      "$REPO_ROOT/open-gridd/src/"*.c -o /usr/bin/nvidia-gridd -lssl -lcrypto -lpthread -ldl
+    chmod 0755 /usr/bin/nvidia-gridd
+  fi
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl restart nvidia-gridd 2>/dev/null || true
 fi
 
 echo "=== Linux vGPU guest provisioning complete (${OS_ID} ${OS_VERSION_ID}); reboot to start headless Wayland RDP ==="

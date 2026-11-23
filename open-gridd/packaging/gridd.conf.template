@@ -1,0 +1,28 @@
+# NVIDIA GRID / vGPU Licensing Configuration (/etc/nvidia/gridd.conf)
+
+# FeatureType:
+#   0 = Unlicensed / NVIDIA Virtual Applications
+#   1 = NVIDIA vGPU
+#   2 = NVIDIA RTX Virtual Workstation (vWS)
+#   3 = NVIDIA vGaming
+#   4 = NVIDIA Virtual Compute Server (vCS)
+FeatureType=2
+
+# EnableUI: TRUE or FALSE (automatically updated to FALSE once NLS/NLL/CSP initializes)
+EnableUI=TRUE
+
+# ClientConfigTokenPath: Directory containing the NLS .tok JWT file
+ClientConfigTokenPath=/etc/nvidia/ClientConfigToken
+
+# Optional lease duration override in minutes (0 = server default)
+# LicenseInterval=0
+
+# Optional HTTP proxy settings
+# ProxyServerAddress=proxy.example.com
+# ProxyServerPort=3128
+# ProxyUserName=proxyuser
+# ProxyCredentialsFilePath=/etc/nvidia/proxy_creds.b64
+
+# Optional Cloud Service Provider marketplace platform ID (1=Azure, 2=AWS, 3=GCP, 4=Alibaba)
+# vGamingMarketplace=2
+# WaitToConnectIMDS=120
