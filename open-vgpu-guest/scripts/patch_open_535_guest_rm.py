@@ -301,6 +301,25 @@ def patch_rm_sources(src_root: Path, overlay_dir: Path) -> None:
         guard_substring="if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))\n    {\n        status = _issuePteDescRpc(",
     )
 
+    # 5. Pre-GSP Pascal GP104 KernelFifo & Intr virtual guest guards (Rank 3A)
+    kernel_fifo_c = nv_dir / "src" / "kernel" / "gpu" / "fifo" / "kernel_fifo.c"
+    if kernel_fifo_c.is_file():
+        _replace_required(
+            kernel_fifo_c,
+            "    // Do internal control call and set numChannels\n    if (IS_GSP_CLIENT(pGpu))",
+            "    // Do internal control call and set numChannels\n    if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))",
+            guard_substring="// Do internal control call and set numChannels\n    if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL(pGpu))",
+        )
+
+    intr_tu102_c = nv_dir / "src" / "kernel" / "gpu" / "intr" / "arch" / "turing" / "intr_tu102.c"
+    if intr_tu102_c.is_file():
+        _replace_required(
+            intr_tu102_c,
+            "    // GSP RM services both MMU non-replayable fault and FIFO interrupts\n    if (IS_GSP_CLIENT(pGpu))",
+            "    // GSP RM services both MMU non-replayable fault and FIFO interrupts\n    if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL_WITHOUT_SRIOV(pGpu))",
+            guard_substring="if (IS_GSP_CLIENT(pGpu) || IS_VIRTUAL_WITHOUT_SRIOV(pGpu))",
+        )
+
     rpc_vgpu_h = nv_dir / "kernel" / "inc" / "vgpu" / "rpc_vgpu.h"
     rpc_txt = rpc_vgpu_h.read_text(encoding="utf-8")
     if "open_vgpu_bar0_rpc.h" not in rpc_txt:

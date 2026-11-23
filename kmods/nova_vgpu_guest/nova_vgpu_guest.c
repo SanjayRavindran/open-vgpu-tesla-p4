@@ -33,6 +33,11 @@ module_param(allow_baremetal_probe, bool, 0444);
 MODULE_PARM_DESC(allow_baremetal_probe,
 		 "Refuse probing bare-metal GPUs unless explicitly set (default false)");
 
+static bool use_gp_in_ring;
+module_param(use_gp_in_ring, bool, 0444);
+MODULE_PARM_DESC(use_gp_in_ring,
+		 "Enable GP_IN_RING (0x80b) in-memory PUT/GET pointers for 535.309.01 host libnvidia-vgpu.so");
+
 struct nova_vgpu_guest_dev {
 	struct pci_dev *pdev;
 	void __iomem *bar0;
@@ -77,6 +82,13 @@ static inline u32 nova_ring_pte_lo(dma_addr_t dma)
 	return (pfn_lo << 12) | 0x0000000bU;
 }
 
+static inline u32 nova_ring_pte_lo_gp(dma_addr_t dma)
+{
+	u32 pfn_lo = (u32)((dma >> 12) & 0x000fffffULL);
+
+	return (pfn_lo << 12) | (use_gp_in_ring ? 0x0000080bU : 0x0000000bU);
+}
+
 static inline u32 nova_ring_pte_hi(dma_addr_t dma)
 {
 	return (u32)((dma >> 32) & 0x000fffffULL);
@@ -99,12 +111,14 @@ static irqreturn_t nova_vgpu_guest_irq(int irq, void *data)
 
 static void nova_vgpu_program_rings(struct nova_vgpu_guest_dev *gdev)
 {
+	iowrite32(0x0aU, gdev->bar0 + NOVA_NV_VGPU_GUEST_ID_58);
+
 	/* SEND_RING (0x8f000..0x8f008) */
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_SEND_RING_LO);
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_SEND_RING_PUT);
 	iowrite32(nova_ring_pte_hi(gdev->send_ring_dma),
 		  gdev->bar0 + NOVA_NV_VGPU_SEND_RING_HI);
-	iowrite32(nova_ring_pte_lo(gdev->send_ring_dma),
+	iowrite32(nova_ring_pte_lo_gp(gdev->send_ring_dma),
 		  gdev->bar0 + NOVA_NV_VGPU_SEND_RING_LO);
 
 	/* RECV_RING (0x8f010..0x8f01c) */
@@ -112,7 +126,7 @@ static void nova_vgpu_program_rings(struct nova_vgpu_guest_dev *gdev)
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_RECV_RING_GET);
 	iowrite32(nova_ring_pte_hi(gdev->recv_ring_dma),
 		  gdev->bar0 + NOVA_NV_VGPU_RECV_RING_HI);
-	iowrite32(nova_ring_pte_lo(gdev->recv_ring_dma),
+	iowrite32(nova_ring_pte_lo_gp(gdev->recv_ring_dma),
 		  gdev->bar0 + NOVA_NV_VGPU_RECV_RING_LO);
 
 	/* EVENT_RING (0x8f030..0x8f03c) */
@@ -123,15 +137,20 @@ static void nova_vgpu_program_rings(struct nova_vgpu_guest_dev *gdev)
 	iowrite32(nova_ring_pte_lo(gdev->event_ring_dma),
 		  gdev->bar0 + NOVA_NV_VGPU_EVENT_RING_LO);
 
-	iowrite32(0x1ffU, gdev->bar0 + NOVA_NV_VGPU_INTR_ENABLE);
+	iowrite32(0x3ffU, gdev->bar0 + NOVA_NV_VGPU_INTR_ENABLE);
 }
 
 static void nova_vgpu_teardown_rings(struct nova_vgpu_guest_dev *gdev)
 {
+	/* Clear *_RING_LO (VALID=0) before *_RING_HI=0 so host does not remap on HI write */
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_INTR_ENABLE);
+	iowrite32(1U, gdev->bar0 + NOVA_NV_VGPU_MSG_RING_CTL);
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_SEND_RING_LO);
+	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_SEND_RING_HI);
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_RECV_RING_LO);
+	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_RECV_RING_HI);
 	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_EVENT_RING_LO);
+	iowrite32(0, gdev->bar0 + NOVA_NV_VGPU_EVENT_RING_HI);
 }
 
 static int nova_vgpu_submit_vrpc(struct nova_vgpu_guest_dev *gdev, u32 func_id,

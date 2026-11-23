@@ -44,6 +44,11 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             "libnvidia-vgpu.so.535.309.01.exports.json",
             "libnvidia-vgpu.so.535.309.01.exposure.json",
             "libnvidia-vgpu.so.535.309.01.layout.json",
+            "libnvidia-encode.analyze.json",
+            "libnvidia-encode.decompile_summary.json",
+            "libnvidia-encode.exports.json",
+            "libnvidia-encode.exposure.json",
+            "libnvidia-encode.layout.json",
         ]
         for fn in expected:
             p = ev_dir / fn
@@ -96,6 +101,14 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             ROOT / "open-vgpu-guest" / "scripts" / "prepare_open_535_guest_rm.sh",
             ROOT / "open-vgpu-guest" / "scripts" / "patch_open_535_guest_rm.py",
             ROOT / "open-vgpu-guest" / "scripts" / "build_open_535_guest_kmod.sh",
+            ROOT / "open-nvenc" / "open_nvenc.h",
+            ROOT / "open-nvenc" / "open_nvenc.c",
+            ROOT / "open-nvenc" / "test_nvenc_unit.c",
+            ROOT / "open-nvenc" / "Makefile",
+            ROOT / "open-host-rm" / "open_host_rm_gp104.h",
+            ROOT / "open-host-rm" / "open_host_rm_gp104.c",
+            ROOT / "open-host-rm" / "test_open_host_rm_unit.c",
+            ROOT / "open-host-rm" / "Makefile",
             ROOT / "docs" / "12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md",
             ROOT / "docs" / "13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md",
             ROOT / "nova-vgpu" / "src" / "rm_ioctl.rs",
@@ -248,6 +261,12 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             "src/nvidia/kernel/vgpu/nv/rpc.c": (
                 "    if (IS_GSP_CLIENT(pGpu))\n    {\n        status = _issuePteDescRpc(\n"
             ),
+            "src/nvidia/src/kernel/gpu/fifo/kernel_fifo.c": (
+                "    // Do internal control call and set numChannels\n    if (IS_GSP_CLIENT(pGpu))\n"
+            ),
+            "src/nvidia/src/kernel/gpu/intr/arch/turing/intr_tu102.c": (
+                "    // GSP RM services both MMU non-replayable fault and FIFO interrupts\n    if (IS_GSP_CLIENT(pGpu))\n"
+            ),
             "src/nvidia/kernel/inc/vgpu/rpc_vgpu.h": (
                 "#ifndef __vgpu_dev_nv_rpc_vgpu_h__\n"
                 "#define __vgpu_dev_nv_rpc_vgpu_h__\n"
@@ -297,6 +316,11 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
             self.assertIn("openVgpuRmApiDupObject", first_pass["src/nvidia/src/kernel/rmapi/rpc_common.c"])
             self.assertIn("IS_VIRTUAL(pGpu)", first_pass["src/nvidia/kernel/inc/vgpu/rpc.h"])
             self.assertIn("IS_VIRTUAL(pGpu)", first_pass["src/nvidia/kernel/vgpu/nv/rpc.c"])
+            self.assertIn("IS_VIRTUAL(pGpu)", first_pass["src/nvidia/src/kernel/gpu/fifo/kernel_fifo.c"])
+            self.assertIn(
+                "IS_VIRTUAL_WITHOUT_SRIOV(pGpu)",
+                first_pass["src/nvidia/src/kernel/gpu/intr/arch/turing/intr_tu102.c"],
+            )
             self.assertIn("openVgpuRpcAllocVidmem", first_pass["src/nvidia/kernel/inc/vgpu/rpc_vgpu.h"])
             self.assertIn("open_vgpu_bar0_rpc.c", first_pass["src/nvidia/srcs.mk"])
             self.assertTrue((src_root / "src/nvidia/kernel/inc/vgpu/open_vgpu_bar0_rpc.h").is_file())

@@ -436,10 +436,35 @@ int main(void)
     assert(open_vgpu_guest_update_pde_2(&guest, h_cli, h_dev, &st) == 0 && st == 0U);
     assert(open_vgpu_guest_update_gpu_pdes(&guest, h_cli, h_dev, 0x400000000ULL, 1U, &st) == 0 && st == 0U);
 
-    assert(open_vgpu_guest_alloc_channel_dma(&guest, h_cli, h_dev, h_chan, 0xc06fU, 64U,
+    assert(open_vgpu_guest_alloc_channel_dma(&guest, h_cli, h_dev, h_chan,
+                                             OPEN_VGPU_GUEST_CLASS_CHANNEL_GPFIFO, 64U,
                                              0x802000000ULL, 0xfef200000ULL, &st) == 0 && st == 0U);
+
+    /* 6) Allocate Pascal GP104 engine objects (NVENC, Compute, 3D, DMA Copy, NVDEC) on GPFIFO channel */
+    const struct {
+        uint32_t h_obj;
+        uint32_t h_cls;
+    } eng_objs[] = {
+        { 0xee010001U, OPEN_VGPU_GUEST_CLASS_VIDEO_ENCODER },
+        { 0xee010002U, OPEN_VGPU_GUEST_CLASS_COMPUTE       },
+        { 0xee010003U, OPEN_VGPU_GUEST_CLASS_3D            },
+        { 0xee010004U, OPEN_VGPU_GUEST_CLASS_DMA_COPY      },
+        { 0xee010005U, OPEN_VGPU_GUEST_CLASS_VIDEO_DECODER },
+    };
+    for (size_t i = 0U; i < sizeof(eng_objs) / sizeof(eng_objs[0]); i++) {
+        uint8_t eng_params[32] = { 0 };
+        assert(open_vgpu_guest_alloc_object(&guest, h_cli, h_chan, eng_objs[i].h_obj,
+                                            eng_objs[i].h_cls, eng_params,
+                                            (uint32_t)sizeof(eng_params), &st) == 0 && st == 0U);
+    }
+
     assert(open_vgpu_guest_idle_channels(&guest, h_cli, &st) == 0 && st == 0U);
 
+    for (size_t i = 0U; i < sizeof(eng_objs) / sizeof(eng_objs[0]); i++) {
+        assert(open_vgpu_guest_free_obj(&guest, h_cli, h_chan, eng_objs[i].h_obj, &st) == 0 && st == 0U);
+    }
+
+    assert(open_vgpu_guest_unmap_bar1(&guest, h_cli, h_dev, h_vid, 0U, bar1_off, &st) == 0 && st == 0U);
     assert(open_vgpu_guest_update_gpu_pdes(&guest, h_cli, h_dev, 0x400000000ULL, 0U, &st) == 0 && st == 0U);
     assert(open_vgpu_guest_unmap_dma(&guest, h_cli, h_dev, h_dma, h_sys, dma_off, &st) == 0 && st == 0U);
     assert(open_vgpu_guest_free_obj(&guest, h_cli, h_dev, h_chan, &st) == 0 && st == 0U);

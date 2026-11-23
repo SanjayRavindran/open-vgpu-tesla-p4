@@ -46,6 +46,12 @@ open-vgpu-plugin/libopen-nvidia-vgpu.so
 open-vgpu-plugin/libnvidia-vgpu.so.535.309.01
 open-vgpu-plugin/mock_vendor_vgpu.so
 open-vgpu-plugin/test_vgpu_plugin_unit
+open-vgpu-guest/test_host_guest_loopback
+open-nvenc/libopen-nvidia-encode.so
+open-nvenc/libnvidia-encode.so.1
+open-nvenc/test_nvenc_unit
+open-host-rm/libopen-host-rm-gp104.so
+open-host-rm/test_open_host_rm_unit
 
 # Rust / Python artifacts
 nova-vgpu/target/

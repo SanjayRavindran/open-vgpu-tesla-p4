@@ -29,6 +29,14 @@ extern "C" {
 #define OPEN_VGPU_GUEST_STATIC_INFO_LEN  0x10758U
 #define OPEN_VGPU_GUEST_GR_INFO_LEN      0x07b30U
 
+/* Pascal GP104 (Tesla P4) RM Channel & Engine Object Classes */
+#define OPEN_VGPU_GUEST_CLASS_CHANNEL_GPFIFO 0x0000c06fU /* NVC06F_PASCAL_CHANNEL_GPFIFO_A */
+#define OPEN_VGPU_GUEST_CLASS_VIDEO_ENCODER  0x0000c0b7U /* NVC0B7_VIDEO_ENCODER (NVENC) */
+#define OPEN_VGPU_GUEST_CLASS_VIDEO_DECODER  0x0000c1b0U /* NVC1B0_VIDEO_DECODER (NVDEC) */
+#define OPEN_VGPU_GUEST_CLASS_DMA_COPY       0x0000c1b5U /* NVC1B5_DMA_COPY (CE) */
+#define OPEN_VGPU_GUEST_CLASS_3D             0x0000c197U /* NVC197_PASCAL_A (3D/Graphics) */
+#define OPEN_VGPU_GUEST_CLASS_COMPUTE        0x0000c1c0U /* NVC1C0_PASCAL_COMPUTE_A (CUDA) */
+
 #define NV_VGPU_BAR0_PMC_BOOT_0          0x000000ULL
 #define NV_VGPU_BAR0_PFB_CSTATUS         0x10f20cULL
 #define NV_VGPU_BAR0_VGPU_BASE           0x08f000ULL
@@ -152,6 +160,13 @@ int  open_vgpu_guest_alloc_virtmem(open_vgpu_guest_ctx_t *ctx, uint32_t h_client
 int  open_vgpu_guest_map_bar1(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
                               uint32_t h_device, uint32_t h_mem, uint64_t length,
                               uint64_t *out_bar1_offset, uint32_t *out_status);
+int  open_vgpu_guest_unmap_bar1(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
+                                uint32_t h_device, uint32_t h_mem, uint32_t flags,
+                                uint64_t bar1_offset, uint32_t *out_status);
+int  open_vgpu_guest_alloc_object(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
+                                  uint32_t h_parent, uint32_t h_obj, uint32_t h_class,
+                                  const void *params, uint32_t params_size,
+                                  uint32_t *out_status);
 int  open_vgpu_guest_alloc_ctx_dma(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
                                    uint32_t h_dma, uint32_t h_mem, uint64_t limit,
                                    uint32_t *out_status);

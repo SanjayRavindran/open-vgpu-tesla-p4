@@ -560,3 +560,46 @@ int open_vgpu_guest_free_obj(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
     gw32(p, 0x08U, h_obj);
     return open_vgpu_guest_vrpc_call(ctx, 0x0aU, p, (uint32_t)sizeof(p), out_status);
 }
+
+int open_vgpu_guest_unmap_bar1(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
+                               uint32_t h_device, uint32_t h_mem, uint32_t flags,
+                               uint64_t bar1_offset, uint32_t *out_status)
+{
+    uint8_t p[48];
+    memset(p, 0, sizeof(p));
+    gw32(p, 0x00U, h_client);
+    gw32(p, 0x04U, h_device);
+    gw32(p, 0x08U, h_mem);
+    gw32(p, 0x0cU, flags);
+    gw64(p, 0x10U, bar1_offset);
+    return open_vgpu_guest_vrpc_call(ctx, 0x0dU, p, (uint32_t)sizeof(p), out_status);
+}
+
+int open_vgpu_guest_alloc_object(open_vgpu_guest_ctx_t *ctx, uint32_t h_client,
+                                 uint32_t h_parent, uint32_t h_obj, uint32_t h_class,
+                                 const void *params, uint32_t params_size,
+                                 uint32_t *out_status)
+{
+    uint32_t copy_len = (params != NULL) ? params_size : 0U;
+    uint32_t wire_len = 0x18U + copy_len;
+    if (wire_len < 0x50U) {
+        wire_len = 0x50U;
+    }
+    if (wire_len > OPEN_VGPU_GUEST_MAX_PAYLOAD) {
+        return -EINVAL;
+    }
+    uint8_t p[512];
+    if (wire_len > sizeof(p)) {
+        return -EINVAL;
+    }
+    memset(p, 0, wire_len);
+    gw32(p, 0x00U, h_client);
+    gw32(p, 0x04U, h_parent);
+    gw32(p, 0x08U, h_obj);
+    gw32(p, 0x0cU, h_class);
+    gw32(p, 0x10U, copy_len);
+    if (copy_len > 0U && params != NULL) {
+        memcpy(p + 0x18U, params, copy_len);
+    }
+    return open_vgpu_guest_vrpc_call(ctx, 0x09U, p, wire_len, out_status);
+}

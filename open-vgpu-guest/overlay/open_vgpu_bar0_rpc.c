@@ -1104,6 +1104,151 @@ NV_STATUS openVgpuRmApiControl(RM_API *pRmApi, NvHandle hClient, NvHandle hObjec
         return NV_OK;
     }
 
+    /*
+     * Pre-GSP Pascal GP104 KernelGraphics static info controls (Rank 3A):
+     * Legacy 535.309.01 host libnvidia-vgpu.so exports GR static info via
+     * 0x9c (GET_CONSOLIDATED_GR_STATIC_INFO, 31,536 B) rather than GSP
+     * NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_* RPCs. Serve them locally
+     * from pState->staticInfo.pGrStaticInfoRaw and GP104 (4 GPC / 20 TPC) geometry.
+     */
+    if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_CAPS ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_INFO ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_GLOBAL_SM_ORDER ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FLOORSWEEPING_MASKS ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_ZCULL_INFO ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_ROP_INFO ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_PPC_MASKS ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_CONTEXT_BUFFERS_INFO ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_SM_ISSUE_RATE_MODIFIER ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_RECORD_SIZE ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_TRACE_DEFINES ||
+        cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_PDB_PROPERTIES)
+    {
+        OPEN_VGPU_BAR0_STATE *pState = _openVgpuGetState(pGpu);
+        NvU32 g, s;
+
+        if (pParamStructPtr == NULL || paramsSize == 0U)
+        {
+            return NV_ERR_INVALID_PARAM_STRUCT;
+        }
+        portMemSet(pParamStructPtr, 0, paramsSize);
+
+        if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_CAPS &&
+            paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CAPS_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CAPS_PARAMS *pCaps =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CAPS_PARAMS *)pParamStructPtr;
+            if (pState != NULL && pState->staticInfo.pGrStaticInfoRaw != NULL)
+            {
+                portMemCopy(pCaps->engineCaps[0].capsTbl,
+                            NV0080_CTRL_GR_CAPS_TBL_SIZE,
+                            pState->staticInfo.pGrStaticInfoRaw,
+                            NV0080_CTRL_GR_CAPS_TBL_SIZE);
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FLOORSWEEPING_MASKS &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_FLOORSWEEPING_MASKS_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_FLOORSWEEPING_MASKS_PARAMS *pFs =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_FLOORSWEEPING_MASKS_PARAMS *)pParamStructPtr;
+            pFs->floorsweepingMasks[0].physGpcMask    = 0x0fU;
+            pFs->floorsweepingMasks[0].physGfxGpcMask = 0x0fU;
+            pFs->floorsweepingMasks[0].numGfxTpc      = 20U;
+            for (g = 0U; g < 4U; g++)
+            {
+                pFs->floorsweepingMasks[0].tpcCount[g]     = 5U;
+                pFs->floorsweepingMasks[0].numPesPerGpc[g] = 2U;
+                pFs->floorsweepingMasks[0].zcullMask[g]    = 0x0fU;
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_GLOBAL_SM_ORDER &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_GLOBAL_SM_ORDER_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_GLOBAL_SM_ORDER_PARAMS *pSm =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_GLOBAL_SM_ORDER_PARAMS *)pParamStructPtr;
+            pSm->globalSmOrder[0].numSm  = 20U;
+            pSm->globalSmOrder[0].numTpc = 20U;
+            for (s = 0U; s < 20U; s++)
+            {
+                pSm->globalSmOrder[0].globalSmId[s].gpcId        = (NvU16)(s / 5U);
+                pSm->globalSmOrder[0].globalSmId[s].localTpcId   = (NvU16)(s % 5U);
+                pSm->globalSmOrder[0].globalSmId[s].localSmId    = 0U;
+                pSm->globalSmOrder[0].globalSmId[s].globalTpcId  = (NvU16)s;
+                pSm->globalSmOrder[0].globalSmId[s].virtualGpcId = (NvU16)(s / 5U);
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_INFO &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_INFO_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_INFO_PARAMS *pInfo =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_INFO_PARAMS *)pParamStructPtr;
+            for (s = 0U; s < NV0080_CTRL_GR_INFO_MAX_SIZE; s++)
+            {
+                pInfo->engineInfo[0].infoList[s].index = s;
+                if (pState != NULL && pState->staticInfo.pGrStaticInfoRaw != NULL &&
+                    (0x20U + (s + 1U) * 8U) <= OPEN_VRPC_GR_STATIC_INFO_BYTES)
+                {
+                    pInfo->engineInfo[0].infoList[s].data =
+                        _rd32(pState->staticInfo.pGrStaticInfoRaw, 0x20U + s * 8U + 4U);
+                }
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_ZCULL_INFO &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ZCULL_INFO_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ZCULL_INFO_PARAMS *pZc =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ZCULL_INFO_PARAMS *)pParamStructPtr;
+            pZc->engineZcullInfo[0].widthAlignPixels           = 32U;
+            pZc->engineZcullInfo[0].heightAlignPixels          = 32U;
+            pZc->engineZcullInfo[0].pixelSquaresByAliquots     = 1024U;
+            pZc->engineZcullInfo[0].aliquotTotal               = 16384U;
+            pZc->engineZcullInfo[0].zcullRegionByteMultiplier  = 32U;
+            pZc->engineZcullInfo[0].zcullRegionHeaderSize      = 32U;
+            pZc->engineZcullInfo[0].zcullSubregionHeaderSize   = 32U;
+            pZc->engineZcullInfo[0].subregionCount             = 16U;
+            pZc->engineZcullInfo[0].subregionWidthAlignPixels  = 32U;
+            pZc->engineZcullInfo[0].subregionHeightAlignPixels = 64U;
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_ROP_INFO &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ROP_INFO_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ROP_INFO_PARAMS *pRop =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_ROP_INFO_PARAMS *)pParamStructPtr;
+            pRop->engineRopInfo[0].ropUnitCount        = 64U;
+            pRop->engineRopInfo[0].ropOperationsFactor = 1U;
+            pRop->engineRopInfo[0].ropOperationsCount  = 64U;
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_PPC_MASKS &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_PPC_MASKS_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_PPC_MASKS_PARAMS *pPpc =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_PPC_MASKS_PARAMS *)pParamStructPtr;
+            for (g = 0U; g < 4U; g++)
+            {
+                pPpc->enginePpcMasks[0].mask[g] = 0x03U;
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_CONTEXT_BUFFERS_INFO &&
+                 paramsSize >= sizeof(NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CONTEXT_BUFFERS_INFO_PARAMS))
+        {
+            NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CONTEXT_BUFFERS_INFO_PARAMS *pCtx =
+                (NV2080_CTRL_INTERNAL_STATIC_KGR_GET_CONTEXT_BUFFERS_INFO_PARAMS *)pParamStructPtr;
+            for (s = 0U; s < 4U; s++)
+            {
+                pCtx->engineContextBuffersInfo[0].engine[s].size      = 0x40000U;
+                pCtx->engineContextBuffersInfo[0].engine[s].alignment = 0x1000U;
+            }
+        }
+        else if (cmd == NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_RECORD_SIZE &&
+                 paramsSize >= sizeof(NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_RECORD_SIZE_PARAMS))
+        {
+            NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_RECORD_SIZE_PARAMS *pFecs =
+                (NV2080_CTRL_CMD_INTERNAL_STATIC_KGR_GET_FECS_RECORD_SIZE_PARAMS *)pParamStructPtr;
+            pFecs->fecsRecordSize[0].fecsRecordSize = 16U;
+        }
+        return NV_OK;
+    }
+
     if (paramsSize > (OPEN_VRPC_PAGE_BYTES - 0x40U))
     {
         NV_PRINTF(LEVEL_ERROR,

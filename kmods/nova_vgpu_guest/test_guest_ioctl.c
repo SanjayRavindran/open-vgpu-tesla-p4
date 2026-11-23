@@ -118,6 +118,40 @@ static int run_probe_535(int fd)
 	return 0;
 }
 
+static int run_probe_535_engines(int fd)
+{
+	uint8_t obj_wire[80];
+	uint32_t res = 0U;
+	uint32_t h_cli = 0xc1d00099U, h_chan = 0xcc010099U;
+	const uint32_t engine_classes[] = {
+		NOVA_VGPU_CLASS_VIDEO_ENCODER,
+		NOVA_VGPU_CLASS_COMPUTE,
+		NOVA_VGPU_CLASS_3D,
+		NOVA_VGPU_CLASS_DMA_COPY,
+		NOVA_VGPU_CLASS_VIDEO_DECODER,
+	};
+
+	for (size_t i = 0; i < sizeof(engine_classes) / sizeof(engine_classes[0]); i++) {
+		uint32_t h_obj = 0xee010001U + (uint32_t)i;
+		uint32_t h_cls = engine_classes[i];
+		uint32_t psz = 0U;
+
+		memset(obj_wire, 0, sizeof(obj_wire));
+		memcpy(obj_wire + 0x00U, &h_cli, 4U);
+		memcpy(obj_wire + 0x04U, &h_chan, 4U);
+		memcpy(obj_wire + 0x08U, &h_obj, 4U);
+		memcpy(obj_wire + 0x0cU, &h_cls, 4U);
+		memcpy(obj_wire + 0x10U, &psz, 4U);
+		if (issue_vrpc(fd, NOVA_VRPC_FUNC_ALLOC_OBJECT, 0U, obj_wire,
+			       (uint32_t)sizeof(obj_wire), &res) < 0 || res != 0U) {
+			fprintf(stderr, "ALLOC_OBJECT class=0x%x failed: res=0x%x\n", h_cls, res);
+			return 1;
+		}
+		printf("ALLOC_OBJECT class=0x%04x handle=0x%08x res=0x%x\n", h_cls, h_obj, res);
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct nova_vgpu_guest_info info;
@@ -136,6 +170,13 @@ int main(int argc, char **argv)
 
 	if (argc > 1 && strcmp(argv[1], "--probe-535") == 0) {
 		int rc = run_probe_535(fd);
+		close(fd);
+		return rc;
+	}
+	if (argc > 1 && strcmp(argv[1], "--probe-535-engines") == 0) {
+		int rc = run_probe_535(fd);
+		if (rc == 0)
+			rc = run_probe_535_engines(fd);
 		close(fd);
 		return rc;
 	}
