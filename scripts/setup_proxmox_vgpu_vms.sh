@@ -72,6 +72,13 @@ run_qm() {
 
 if [ "$DRY_RUN" -eq 0 ]; then
   command -v qm >/dev/null 2>&1 || { echo "qm not found; run on Proxmox VE 8/9 host." >&2; exit 1; }
+  if [ "$PCI_BDF" = "auto" ] || [ ! -d "/sys/bus/pci/devices/${PCI_BDF}" ]; then
+    DETECTED_BDF="$(lspci -D -d 10de:1bb3 2>/dev/null | awk 'NR==1{print $1}')"
+    if [ -n "$DETECTED_BDF" ]; then
+      echo "Auto-detected Tesla P4 PCI BDF on Proxmox VE host: ${DETECTED_BDF}"
+      PCI_BDF="$DETECTED_BDF"
+    fi
+  fi
   if [ "$MODE" = "import-qcow2" ]; then
     test -f "$ALMA_DISK" || { echo "Missing --alma-disk: $ALMA_DISK" >&2; exit 1; }
     test -f "$WIN11_DISK" || { echo "Missing --win11-disk: $WIN11_DISK" >&2; exit 1; }

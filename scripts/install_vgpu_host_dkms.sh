@@ -82,10 +82,12 @@ echo "=== Host vGPU DKMS Installer (${PKG_NAME}/${PKG_VER}, kernel ${KVER}, prox
 
 # 1. Install prerequisite build/DKMS packages
 if [ "$IS_PROXMOX" -eq 1 ]; then
-  HEADERS_PKG="pve-headers-${KVER}"
-  echo "Detected Proxmox VE host; prerequisite packages: dkms build-essential ${HEADERS_PKG} mdevctl"
+  HEADERS_PKG="proxmox-headers-${KVER}"
+  FALLBACK_HEADERS_PKG="pve-headers-${KVER}"
+  echo "Detected Proxmox VE 8/9 host; prerequisite packages: dkms build-essential ${HEADERS_PKG} (or ${FALLBACK_HEADERS_PKG}) mdevctl"
 else
   HEADERS_PKG="linux-headers-${KVER}"
+  FALLBACK_HEADERS_PKG="linux-headers-generic"
   echo "Detected Ubuntu/Debian KVM host; prerequisite packages: dkms build-essential ${HEADERS_PKG} qemu-system-x86 ovmf swtpm mdevctl"
 fi
 
@@ -94,10 +96,17 @@ if [ "$DRY_RUN" -eq 1 ]; then
 else
   DEBIAN_FRONTEND=noninteractive apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dkms build-essential "${HEADERS_PKG}" mdevctl || \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dkms build-essential "${FALLBACK_HEADERS_PKG}" mdevctl || \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dkms build-essential proxmox-default-headers mdevctl || \
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dkms build-essential mdevctl
+  if [ "$IS_PROXMOX" -eq 1 ] && ! grep -qE "intel_iommu=on|amd_iommu=on|iommu=pt" /proc/cmdline 2>/dev/null; then
+    echo "WARNING: IOMMU is not active in /proc/cmdline on this Proxmox VE host." >&2
+    echo "  - For GRUB (/etc/default/grub): add 'intel_iommu=on iommu=pt' to GRUB_CMDLINE_LINUX_DEFAULT && update-grub" >&2
+    echo "  - For systemd-boot (/etc/kernel/cmdline): append 'intel_iommu=on iommu=pt' && proxmox-boot-tool refresh" >&2
+  fi
 fi
 
-# 2. Build open-source host daemons if not explicitly passed
+# 2. Build open-source host daemons & libraries if not explicitly passed
 if [ "$SKIP_BUILD_OPEN" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   if [ -z "$OPEN_VGPUD" ] && [ -f "$REPO_ROOT/nova-vgpu/Cargo.toml" ] && command -v cargo >/dev/null 2>&1; then
     (cd "$REPO_ROOT/nova-vgpu" && cargo build --release --bin open-nvidia-vgpud)
@@ -118,8 +127,14 @@ if [ "$SKIP_BUILD_OPEN" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
   if [ -f "$REPO_ROOT/open-nvml-smi/Makefile" ] && command -v gcc >/dev/null 2>&1; then
     make -C "$REPO_ROOT/open-nvml-smi" all
   fi
+  if [ -f "$REPO_ROOT/open-vgpu-plugin/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+    make -C "$REPO_ROOT/open-vgpu-plugin" all
+  fi
+  if [ -f "$REPO_ROOT/open-host-rm/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+    make -C "$REPO_ROOT/open-host-rm" all
+  fi
 else
-  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd, open-nvidia-vgpu-mgr, open-nvml-smi"
+  echo "[plan] Resolve/build open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd, open-nvidia-vgpu-mgr, open-nvml-smi, libopen-nvidia-vgpu.so, libopen-host-rm-gp104.so"
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -188,6 +203,12 @@ if [ -f "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" ] && [ -f "$REPO_ROOT/open-nv
   install -m 0755 "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" "${OPT_DIR}/open-nvidia-smi"
   install -m 0755 "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" "${OPT_DIR}/libopen-nvidia-ml.so"
 fi
+if [ -f "$REPO_ROOT/open-vgpu-plugin/libopen-nvidia-vgpu.so" ]; then
+  install -m 0755 "$REPO_ROOT/open-vgpu-plugin/libopen-nvidia-vgpu.so" "${OPT_DIR}/lib/libopen-nvidia-vgpu.so"
+fi
+if [ -f "$REPO_ROOT/open-host-rm/libopen-host-rm-gp104.so" ]; then
+  install -m 0755 "$REPO_ROOT/open-host-rm/libopen-host-rm-gp104.so" "${OPT_DIR}/lib/libopen-host-rm-gp104.so"
+fi
 
 # Retain stable vmiop plugin, nvidia-smi, and NVML from .run
 install -m 0755 "$TMP_EXTRACT/pkg/nvidia-smi" "${OPT_DIR}/nvidia-smi"
@@ -250,13 +271,15 @@ EOF
 
 cat > /etc/systemd/system/nvidia-vgpu-mgr.service <<EOF
 [Unit]
-Description=NVIDIA vGPU Manager Daemon (${PKG_VER})
+Description=Open-Source NVIDIA vGPU Manager Daemon (${PKG_VER})
 After=nvidia-vgpud.service
 Requires=nvidia-vgpud.service
 
 [Service]
 Type=forking
 Environment=LD_LIBRARY_PATH=${OPT_DIR}/lib
+Environment=OPEN_VGPU_PLUGIN_LIB=${OPT_DIR}/lib/libopen-nvidia-vgpu.so
+Environment=OPEN_VGPU_VENDOR_PLUGIN=${OPT_DIR}/lib/libnvidia-vgpu.so.${PKG_VER}
 ExecStart=${OPT_DIR}/nvidia-vgpu-mgr
 ExecStopPost=/bin/rm -rf /var/run/nvidia-vgpu-mgr
 

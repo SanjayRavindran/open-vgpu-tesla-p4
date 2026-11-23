@@ -14,6 +14,7 @@ GRID_620_RUN=""
 RDP_USER="zero"
 RDP_PASS="${RDP_PASS:-}"
 WITH_SELKIES=0
+WITH_OPEN_GUEST_KMOD=0
 DRY_RUN=0
 
 usage() {
@@ -21,14 +22,15 @@ usage() {
 Usage: provision_alma_guest.sh [options]
 
 Options:
-  --dls-url <url>        FastAPI-DLS base URL (default: https://192.168.1.24)
-  --grid-535-run <path>  Path to NVIDIA-Linux-x86_64-535.309.01-grid.run
-  --grid-620-run <path>  Path to NVIDIA-Linux-x86_64-620.70.06-grid.run (optional Wayland overlay)
-  --rdp-user <user>      Desktop / RDP username (default: zero)
-  --rdp-pass <pass>      RDP password (or set RDP_PASS env var; required unless --dry-run)
-  --with-selkies         Also configure Docker CE + NVIDIA CDI + Selkies 10-bit 4:4:4
-  --dry-run              Print planned steps without modifying the system
-  -h, --help             Show help
+  --dls-url <url>          FastAPI-DLS base URL (default: https://192.168.1.24)
+  --grid-535-run <path>    Path to NVIDIA-Linux-x86_64-535.309.01-grid.run
+  --grid-620-run <path>    Path to NVIDIA-Linux-x86_64-620.70.06-grid.run (optional Wayland overlay)
+  --rdp-user <user>        Desktop / RDP username (default: zero)
+  --rdp-pass <pass>        RDP password (or set RDP_PASS env var; required unless --dry-run)
+  --with-selkies           Also configure Docker CE + NVIDIA CDI + Selkies 10-bit 4:4:4
+  --with-open-guest-kmod   Also compile open-gpu-kernel-modules@535.309.01 GP104 BAR0 VRPC guest modules & libopen-nvidia-encode.so
+  --dry-run                Print planned steps without modifying the system
+  -h, --help               Show help
 EOF
 }
 
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
     --rdp-user) RDP_USER="${2:-}"; shift 2 ;;
     --rdp-pass) RDP_PASS="${2:-}"; shift 2 ;;
     --with-selkies) WITH_SELKIES=1; shift ;;
+    --with-open-guest-kmod) WITH_OPEN_GUEST_KMOD=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -176,6 +179,17 @@ systemctl restart nvidia-gridd 2>/dev/null || true
 
 if [ "$WITH_SELKIES" -eq 1 ] && [ -f "$SCRIPT_DIR/setup_selkies_pixelflux_vgpu.sh" ]; then
   bash "$SCRIPT_DIR/setup_selkies_pixelflux_vgpu.sh"
+fi
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$REPO_ROOT/open-nvenc/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+  make -C "$REPO_ROOT/open-nvenc" clean all
+  install -m 0755 "$REPO_ROOT/open-nvenc/libopen-nvidia-encode.so" /usr/local/lib64/libopen-nvidia-encode.so 2>/dev/null || true
+  make -C "$REPO_ROOT/open-nvenc" clean
+fi
+
+if [ "$WITH_OPEN_GUEST_KMOD" -eq 1 ] && [ -f "$REPO_ROOT/open-vgpu-guest/scripts/build_open_535_guest_kmod.sh" ]; then
+  bash "$REPO_ROOT/open-vgpu-guest/scripts/build_open_535_guest_kmod.sh" --workdir /tmp/open-535-guest-build --kver "$(uname -r)"
 fi
 
 echo "=== AlmaLinux 10.3 guest provisioning complete; reboot to start headless Wayland RDP ==="

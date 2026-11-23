@@ -27,13 +27,15 @@ sudo bash scripts/install_vgpu_host_dkms.sh \
 ```
 
 What [`install_vgpu_host_dkms.sh`](../scripts/install_vgpu_host_dkms.sh) does automatically:
-1. Auto-detects **Proxmox VE** (`pveversion` -> `pve-headers-$(uname -r)`) vs **Ubuntu KVM** (`linux-headers-$(uname -r)`).
-2. Auto-builds our six open-source host replacements if `--open-*` paths are omitted:
+1. Auto-detects **Proxmox VE 8 / 9** (`pveversion` -> `proxmox-headers-$(uname -r)` / `pve-headers-$(uname -r)` / `proxmox-default-headers` + `/proc/cmdline` IOMMU check for both GRUB and `proxmox-boot-tool`) vs **Ubuntu KVM** (`linux-headers-$(uname -r)`).
+2. Auto-builds and installs our clean-room open-source host replacements into `/opt/nvidia-vgpu-535`:
    - `open-nvidia-vgpud` (`nova-vgpu` Rust release binary)
-   - `libopen-vgxcfg.so` (`open-vgxcfg` C library)
+   - `libopen-vgxcfg.so` (`open-vgxcfg` C library, `9/9` exports)
    - `open-nvidia-xid-logd` (`open-xid-logd` C daemon)
-   - `open-nvidia-vgpu-mgr` (`open-vgpu-mgr` C runtime daemon exporting all 60 `vmiop_*` symbols)
+   - `open-nvidia-vgpu-mgr` (`open-vgpu-mgr` C runtime daemon exporting all `60/60` `vmiop_*` symbols)
    - `open-nvidia-smi` + `libopen-nvidia-ml.so` (`open-nvml-smi` C telemetry CLI & NVML library)
+   - `libopen-nvidia-vgpu.so` (`open-vgpu-plugin` C `VER_5_0`/`VER_2_0` `vmiop` mediator plugin implementing all `47/47` cataloged live VRPCs + `0x50`/`0x9c` static info + hybrid interposer wired via `OPEN_VGPU_PLUGIN_LIB`)
+   - `libopen-host-rm-gp104.so` (`open-host-rm` C Tier 2B host GP104 physical RM HAL slice)
 3. Removes any unmanaged `/lib/modules/$(uname -r)/extra/nvidia*.ko` duplicates and registers **`nvidia-vgpu-kvm/535.309.01`** cleanly under DKMS (`/usr/src/nvidia-vgpu-kvm-535.309.01/dkms.conf`), quoting `'make'` (`MAKE[0]="'make' -j$(nproc) KERNEL_UNAME=${kernelver} SYSSRC=${kernel_source_dir} modules"`) and running `dkms install --force` so DKMS installs signed `.ko.zst` modules into `/lib/modules/$(uname -r)/updates/dkms/` cleanly across kernel upgrades.
 4. Replaces legacy bare-metal R580 configs (`/etc/modules-load.d/nvidia-p4.conf` and `nvidia-drm` bare-metal options) with `/etc/modprobe.d/blacklist-nouveau.conf` and `/etc/modules-load.d/nvidia-vgpu.conf` (`nvidia`, `nvidia-vgpu-vfio`, `vfio-pci`, `mdev`).
 5. Installs clean systemd units:

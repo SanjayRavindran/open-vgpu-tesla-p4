@@ -12,7 +12,7 @@ description: >-
 
 ## 1. Host DKMS + Open-Source Daemons (`Ubuntu KVM` OR `Proxmox VE 8/9`)
 Both distributions run mainline Linux kernels with IOMMU (`intel_iommu=on iommu=pt`) and UEFI/OVMF.
-The installer auto-detects `pveversion` (selecting `pve-headers-$(uname -r)`) vs Ubuntu (`linux-headers-$(uname -r)`), builds `nvidia-vgpu-kvm/535.309.01` under DKMS (`nvidia` + `nvidia-vgpu-vfio`), installs all 6 open-source host binaries (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`, `open-nvidia-smi`, `libopen-nvidia-ml.so`), cleans stale R580 files, and enables the systemd services:
+The installer auto-detects `pveversion` (selecting `proxmox-headers-$(uname -r)` / `pve-headers-$(uname -r)` / `proxmox-default-headers`) vs Ubuntu (`linux-headers-$(uname -r)`), builds `nvidia-vgpu-kvm/535.309.01` under DKMS (`nvidia` + `nvidia-vgpu-vfio`), installs all clean-room open-source host binaries & libraries (`open-nvidia-vgpud`, `libopen-vgxcfg.so`, `open-nvidia-xid-logd`, `open-nvidia-vgpu-mgr`, `open-nvidia-smi`, `libopen-nvidia-ml.so`, `libopen-nvidia-vgpu.so`, `libopen-host-rm-gp104.so`), wires `OPEN_VGPU_PLUGIN_LIB=/opt/nvidia-vgpu-535/lib/libopen-nvidia-vgpu.so` in `nvidia-vgpu-mgr.service`, cleans stale R580 files, and enables the systemd services:
 ```bash
 # Unified Host + FastAPI-DLS installer:
 sudo bash scripts/install_open_vgpu.sh --role host \
