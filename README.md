@@ -14,9 +14,18 @@ A dedicated, **100% open-source** clean-room Rust + Linux kernel vGPU research s
 
 | Component | License | Description |
 | :--- | :--- | :--- |
-| [`nova-vgpu/`](./nova-vgpu/Cargo.toml) | `GPL-2.0` | Standalone safe Rust reimplementation of `nvidia-vgpud`, `vgpuConfig.xml` (12 Tesla P4 profiles), `NVA081` packing, `nvidia-vgpu-vfio` `'r'`/`'q'` ioctl ABIs, `vmiop` `VER_5_0` lifecycle, GP104 virtual PCI config, BAR0 `0x8f000` trapping, `"VRPC"` RPC dispatch, `VMMU`, `CHIDMGR`, `FRL`, clean-room guest driver (`guest.rs`), and Falcon blob signature/TOC validator (`falcon_blobs.rs`). |
+| [`nova-vgpu/`](./nova-vgpu/Cargo.toml) | `GPL-2.0` | Standalone safe Rust reimplementation of `nvidia-vgpud` (`open-nvidia-vgpud`), `vgpuConfig.xml` (12 Tesla P4 profiles), `NVA081` packing, `nvidia-vgpu-vfio` `'r'`/`'q'` ioctl ABIs, `vmiop` `VER_5_0` lifecycle, GP104 virtual PCI config, BAR0 `0x8f000` trapping, `"VRPC"` RPC dispatch, `VMMU`, `CHIDMGR`, `FRL`, clean-room guest driver (`guest.rs`), and Falcon blob signature/TOC validator (`falcon_blobs.rs`). |
+| [`open-vgxcfg/`](./open-vgxcfg/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-vgxcfg.so` (`libnvidia-vgxcfg.so.1`) implementing all `9/9` `vgxConfig*` exports (`0` byte difference vs. `libnvidia-vgxcfg.so.535.309.01`). |
+| [`open-xid-logd/`](./open-xid-logd/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-xid-logd` NVML XID event & 76-char Base64 debugdump daemon. |
+| [`open-vgpu-mgr/`](./open-vgpu-mgr/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-vgpu-mgr` KVM/VFIO `vmiop-env` runtime daemon exporting all `60/60` `vmiop_*` symbols + live `msync`-safe VRPC trace tap. |
+| [`open-nvml-smi/`](./open-nvml-smi/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-smi` CLI & `libopen-nvidia-ml.so` (`libnvidia-ml.so.1`) querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`). |
+| [`open-vgpu-plugin/`](./open-vgpu-plugin/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-nvidia-vgpu.so` (`VER_5_0`/`VER_2_0` `vmiop` mediator plugin) implementing all `47/47` cataloged live VRPC opcodes, guest PFN pinning, BAR1/USERD MMIO forwarding, exact VGX `0x23.0x05` `0x50` (`67,416` B) & `0x9c` (`31,536` B) static-info serializers, and hybrid interposer. |
+| [`open-vgpu-guest/`](./open-vgpu-guest/Makefile) | `MIT` / `GPL-2.0` | Clean-room guest BAR0 `0x8f000` `"VRPC"` client (`open_vgpu_guest_rpc.{h,c}`), `59`-VRPC zero-blob host↔guest loopback test, and `NVIDIA/open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC overlay (`overlay/open_vgpu_bar0_rpc.{h,c}`, `scripts/patch_open_535_guest_rm.py`, `scripts/build_open_535_guest_kmod.sh`). |
+| [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`) implementing all `10/10` ELF exports, `43/43` `NV_ENCODE_API_FUNCTION_LIST` slots, `45/45` `NvTool` API names, Pascal GP104 H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `/dev/nvidiactl` `NVC0B7_VIDEO_ENCODER` (`0xc0b7`) RM bridge. |
+| [`open-host-rm/`](./open-host-rm/Makefile) | `MIT` | Clean-room C `libopen-host-rm-gp104.so` Tier 2B host GP104 physical RM HAL slice (Category #1 signed Falcon WPR1/ACR LSF header builder for `8/8` Falcons, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, and `22`-profile Tesla P4 vGPU / 50-50 `GRID P4-4Q` `2×2048` CHID partitioner). |
+| [`evidence/vgpu-535-rea610/`](./evidence/vgpu-535-rea610/rea_doctor.json) | Clean-room JSON | Machine-readable `rea@6.10.1` (`Ghidra 12.2`) static analysis, binary layout, native exports, release exposure, and decompilation summaries for `535.309.01` host & guest binaries. |
 | [`kmods/nova_vgpu_mdev/`](./kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) | `GPL-2.0` | Linux `7.0+` host `vfio-mdev` PCI mediator (`vfio_dma_rw`, MSI/INTx `eventfd_signal`, `16 MiB` BAR1 `mmap`). |
-| [`kmods/nova_vgpu_guest/`](./kmods/nova_vgpu_guest/nova_vgpu_guest.c) | `GPL-2.0` | Linux `7.0+` open-source vGPU guest PCI driver (`0x8f000` BAR0/`"VRPC"` shared rings) + [`test_guest_ioctl.c`](./kmods/nova_vgpu_guest/test_guest_ioctl.c). |
+| [`kmods/nova_vgpu_guest/`](./kmods/nova_vgpu_guest/nova_vgpu_guest.c) | `GPL-2.0` | Linux `7.0+` open-source vGPU guest PCI driver (`0x8f000` BAR0/`"VRPC"` shared rings, `GP_IN_RING` `0x80b`, LO-before-HI teardown) + [`test_guest_ioctl.c`](./kmods/nova_vgpu_guest/test_guest_ioctl.c). |
 | [`scripts/extract_proprietary_blobs.sh`](./scripts/extract_proprietary_blobs.sh) | `GPL-2.0` | SHA-256-verified extractor for Host `535.309.01` GP104 Falcon blobs, Linux Guest `535.309.01`, R620 (`620.70.06`) Wayland EGL/GBM overlay (`wayland620.tgz`), and Windows Guest `539.72` WHQL. |
 | [`scripts/patch_535_guest_linux7.py`](./scripts/patch_535_guest_linux7.py) | `GPL-2.0` | Linux `7.x+` kernel compatibility patcher (`strncpy` + `drm_atomic_commit`) for `535.309.01-grid` Linux guests. |
 | [`scripts/patch_grd_ptx_535.sh`](./scripts/patch_grd_ptx_535.sh) | `GPL-2.0` | Downgrades GNOME Remote Desktop's `grd-cuda-avc-utils_30.ptx` header (`.version 8.7 -> 8.0`) for `535`'s CUDA `12.1`/`12.2` PTX `8.2` limit. |
@@ -85,8 +94,21 @@ Full side-by-side R620 comparison and root causes are in [`docs/06-LIMITATIONS-R
 ## Automated Tests & Live Verification
 
 ```bash
-cd nova-vgpu && cargo test --verbose
-cd .. && python3 -m unittest discover -s tests -v
+# Rust open-nvidia-vgpud + RM ioctl unit tests
+(cd nova-vgpu && cargo test --all-targets)
+
+# All 8 clean-room C host & guest component test suites
+make -C open-vgxcfg clean all test
+make -C open-xid-logd clean all test
+make -C open-vgpu-mgr clean all test
+make -C open-nvml-smi clean all test
+make -C open-vgpu-plugin clean all test
+make -C open-vgpu-guest clean all test
+make -C open-nvenc clean all test
+make -C open-host-rm clean all test
+
+# Repository hygiene, patcher idempotency, REA evidence & script dry-run tests
+python3 -m unittest discover -s tests -v
 ```
 
 ## Documentation
@@ -96,20 +118,30 @@ cd .. && python3 -m unittest discover -s tests -v
 - [04 — 2-VM 50/50 (`GRID P4-4Q`) Pure Wayland, Windows 11 WDDM & Selkies 10-bit 4:4:4 Guide](./docs/04-R620-WAYLAND-ON-R535-MULTI-VM-RDP.md)
 - [05 — Complete Project Retrospective & Open vGPU Pros/Cons](./docs/05-PROJECT-RETROSPECTIVE-AND-PROS-CONS.md)
 - [06 — Limitations, R620 vs. R535 Hybrid Comparison, RDP Feature Matrix & Live Verification Report](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md)
+- [07 — Reproducible Ubuntu KVM & Proxmox VE 8/9 Deployment Guide](./docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md)
+- [08 — Clean-Room Open-Source Host & Guest Daemons (`rea@6.10.1`)](./docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md)
+- [09 — Open-Source vs. Closed-Source vGPU Software Architecture Diagrams](./docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md)
+- [10 — Open-Source Roadmap, Remaining Blob Matrix & Effort Estimate](./docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md)
+- [11 — Unified Host & Guest Installation Guide](./docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md)
+- [12 — Open `vmiop` Plugin (`libopen-nvidia-vgpu.so`) & 47-Opcode Live VRPC Catalog](./docs/12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md)
+- [13 — Clean-Room Open Guest vGPU Kernel Driver (`open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC Overlay)](./docs/13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md)
 - [Disclaimer, Risk Notice & AI/LLM Usage Disclosure](./DISCLAIMER.md)
-
 
 ---
 
-## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host Daemons (`rea@6.10.1`)
+## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host/Guest Stack (`rea@6.10.1`)
 
-All six `535.309.01-vgpu-kvm` host userspace configuration, runtime, and telemetry binaries have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and replaced with clean-room open-source implementations, paired with reproducible **Ubuntu KVM** and **Proxmox VE 8/9** host & guest installation scripts:
-- **Open-Source Host Daemons & Telemetry (`100%` of Host Userspace Executables)**:
+All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin, the guest BAR0 `"VRPC"` kernel driver overlay, the guest NVENC userspace wrapper, and the GP104 physical host RM HAL slice have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and implemented as clean-room open-source components:
+- **Clean-Room Open-Source Host & Guest Components**:
   - `nova-vgpu` (`open-nvidia-vgpud`): pure-Rust `/dev/nvidiactl` RM ioctl registrar (`NVA081` `0xa0810101` + `0xa0810109`).
-  - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all 9 `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
+  - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all `9/9` `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
   - `open-xid-logd` (`open-nvidia-xid-logd`): clean-room C NVML XID daemon (`mock-NVML` + 76-char Base64 debugdump tested).
-  - `open-vgpu-mgr` (`open-nvidia-vgpu-mgr`): clean-room C KVM/VFIO `vmiop-env` runtime daemon exporting all `60` `vmiop_*` symbols (`0` symbol diff against `nvidia-vgpu-mgr`).
+  - `open-vgpu-mgr` (`open-nvidia-vgpu-mgr`): clean-room C KVM/VFIO `vmiop-env` runtime daemon exporting all `60/60` `vmiop_*` symbols (`0` symbol diff against `nvidia-vgpu-mgr`).
   - `open-nvml-smi` (`open-nvidia-smi` + `libopen-nvidia-ml.so`): clean-room C NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and active vGPU instances.
+  - `open-vgpu-plugin` (`libopen-nvidia-vgpu.so`): clean-room C `vmiop` mediator plugin (`VER_5_0`/`VER_2_0`, `47/47` live VRPC opcodes, PFN pinning, BAR1/USERD MMIO forwarding, exact `0x50` `67,416` B & `0x9c` `31,536` B binary serializers).
+  - `open-vgpu-guest` + `kmods/nova_vgpu_guest`: clean-room guest BAR0 `0x8f000` `"VRPC"` client (`59`-VRPC zero-blob host↔guest loopback), `nova_vgpu_guest.ko`, and `NVIDIA/open-gpu-kernel-modules@535.309.01` zero-blob guest `nvidia*.ko` (`Dual MIT/GPL`, `taint: OE`) overlay.
+  - `open-nvenc` (`libopen-nvidia-encode.so` / `libnvidia-encode.so.1`): clean-room NVENC 12.1 userspace library (`10/10` exports, `43/43` function slots, `45/45` `NvTool` names, GP104 H.264/HEVC 10-bit 4:4:4 + `/dev/nvidiactl` `0xc0b7` RM bridge).
+  - `open-host-rm` (`libopen-host-rm-gp104.so`): clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, `22` vGPU types, 50/50 `GRID P4-4Q` split).
   - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
 - **Unified Host & Guest Installation Scripts**:
   - `scripts/install_open_vgpu.sh`: unified `--role host|guest-linux|guest-windows` installer for the 50/50 vGPU stack.
