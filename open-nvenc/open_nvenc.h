@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * open_nvenc.h - Clean-room Open-Source NVENC Userspace API & RM Bridge
+ * open_nvenc.h - Clean-room Open-Source NVENC 13.0 Userspace API & GP104 RM Engine
  *
- * Drop-in ABI-compatible replacement & trace interposer for
- * libnvidia-encode.so.535.309.01 (SONAME libnvidia-encode.so.1) on
- * NVIDIA Tesla P4 (Pascal GP104 / GRID P4-4Q vGPU).
+ * Drop-in ABI-compatible replacement & standalone hardware encoder for
+ * libnvidia-encode.so (SONAME libnvidia-encode.so.1, NVENC API 13.0 / 0xd0)
+ * on NVIDIA Tesla P4 (Pascal GP104 / GRID P4-4Q vGPU, NVC2B7_VIDEO_ENCODER 0xc2b7).
  *
  * Exports all 10 ELF dynamic symbols verified via rea@6.10.1:
  *   - NvEncodeAPICreateInstance
@@ -25,9 +25,9 @@
 extern "C" {
 #endif
 
-/* NVENC 12.1 ABI constants (matching FUN_0011f2b0(0x7102000c) -> 0x000000c1) */
-#define NVENCAPI_MAJOR_VERSION 12U
-#define NVENCAPI_MINOR_VERSION 1U
+/* NVENC 13.0 ABI constants (NvEncodeAPIGetMaxSupportedVersion -> 0x000000d0) */
+#define NVENCAPI_MAJOR_VERSION 13U
+#define NVENCAPI_MINOR_VERSION 0U
 #define NVENCAPI_VERSION       (NVENCAPI_MAJOR_VERSION | (NVENCAPI_MINOR_VERSION << 24))
 
 #define NVENCAPI_STRUCT_VERSION(ver) \
@@ -36,15 +36,15 @@ extern "C" {
 #define NV_ENCODE_API_FUNCTION_LIST_VER           NVENCAPI_STRUCT_VERSION(2U)
 #define NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER  NVENCAPI_STRUCT_VERSION(1U)
 #define NV_ENC_CAPS_PARAM_VER                     NVENCAPI_STRUCT_VERSION(1U)
-#define NV_ENC_CONFIG_VER                         (NVENCAPI_STRUCT_VERSION(8U) | (1U << 31))
-#define NV_ENC_PRESET_CONFIG_VER                  (NVENCAPI_STRUCT_VERSION(4U) | (1U << 31))
-#define NV_ENC_INITIALIZE_PARAMS_VER              (NVENCAPI_STRUCT_VERSION(5U) | (1U << 31))
+#define NV_ENC_CONFIG_VER                         (NVENCAPI_STRUCT_VERSION(9U) | (1U << 31))
+#define NV_ENC_PRESET_CONFIG_VER                  (NVENCAPI_STRUCT_VERSION(5U) | (1U << 31))
+#define NV_ENC_INITIALIZE_PARAMS_VER              (NVENCAPI_STRUCT_VERSION(7U) | (1U << 31))
 #define NV_ENC_CREATE_INPUT_BUFFER_VER            NVENCAPI_STRUCT_VERSION(1U)
 #define NV_ENC_LOCK_INPUT_BUFFER_VER              NVENCAPI_STRUCT_VERSION(1U)
 #define NV_ENC_CREATE_BITSTREAM_BUFFER_VER        NVENCAPI_STRUCT_VERSION(1U)
-#define NV_ENC_LOCK_BITSTREAM_VER                 NVENCAPI_STRUCT_VERSION(1U)
-#define NV_ENC_PIC_PARAMS_VER                     (NVENCAPI_STRUCT_VERSION(6U) | (1U << 31))
-#define NV_ENC_REGISTER_RESOURCE_VER              NVENCAPI_STRUCT_VERSION(4U)
+#define NV_ENC_LOCK_BITSTREAM_VER                 (NVENCAPI_STRUCT_VERSION(2U) | (1U << 31))
+#define NV_ENC_PIC_PARAMS_VER                     (NVENCAPI_STRUCT_VERSION(7U) | (1U << 31))
+#define NV_ENC_REGISTER_RESOURCE_VER              NVENCAPI_STRUCT_VERSION(5U)
 #define NV_ENC_MAP_INPUT_RESOURCE_VER             NVENCAPI_STRUCT_VERSION(4U)
 #define NV_ENC_RECONFIGURE_PARAMS_VER             (NVENCAPI_STRUCT_VERSION(1U) | (1U << 31))
 #define NV_ENC_STAT_VER                           NVENCAPI_STRUCT_VERSION(1U)
@@ -54,16 +54,25 @@ extern "C" {
 #define NV_ENC_RESTORE_ENCODER_STATE_PARAMS_VER   NVENCAPI_STRUCT_VERSION(1U)
 #define NV_ENC_LOOKAHEAD_PIC_PARAMS_VER           NVENCAPI_STRUCT_VERSION(1U)
 
-/* Pascal GP104 RM classes & ioctls */
-#define OPEN_NVENC_RM_CLASS_ROOT_CLIENT        0x00000041U
-#define OPEN_NVENC_RM_CLASS_DEVICE_0           0x00000080U
-#define OPEN_NVENC_RM_CLASS_SUBDEVICE_0        0x00002080U
+/* Pascal GP104 RM classes & ioctls (verified via Phase 0 hardware trace) */
+#define OPEN_NVENC_RM_CLASS_ROOT_CLIENT        0x00000041U /* NV01_ROOT_CLIENT */
+#define OPEN_NVENC_RM_CLASS_DEVICE_0           0x00000080U /* NV01_DEVICE_0 */
+#define OPEN_NVENC_RM_CLASS_SUBDEVICE_0        0x00002080U /* NV20_SUBDEVICE_0 */
+#define OPEN_NVENC_RM_CLASS_CTXDMA             0x00000002U /* NV01_CONTEXT_DMA */
+#define OPEN_NVENC_RM_CLASS_SYSMEM             0x0000003eU /* NV01_MEMORY_SYSTEM */
+#define OPEN_NVENC_RM_CLASS_VIDMEM             0x00000040U /* NV01_MEMORY_LOCAL_USER */
+#define OPEN_NVENC_RM_CLASS_VASPACE            0x00000070U /* FERMI_VASPACE_A */
+#define OPEN_NVENC_RM_CLASS_EVENT              0x00000079U /* NV01_EVENT_OS_EVENT */
+#define OPEN_NVENC_RM_CLASS_MEM_VIRTUAL        0x000050a0U /* NV50_MEMORY_VIRTUAL */
+#define OPEN_NVENC_RM_CLASS_NVENC_SW_SESSION   0x0000a0bcU /* NVENC_SW_SESSION */
 #define OPEN_NVENC_RM_CLASS_CHANNEL_GPFIFO     0x0000c06fU /* NVC06F_PASCAL_CHANNEL_GPFIFO_A */
-#define OPEN_NVENC_RM_CLASS_VIDEO_ENCODER      0x0000c0b7U /* NVC0B7_VIDEO_ENCODER (Pascal GP104) */
+#define OPEN_NVENC_RM_CLASS_COPY_ENGINE        0x0000c0b5U /* PASCAL_DMA_COPY_A */
+#define OPEN_NVENC_RM_CLASS_VIDEO_ENCODER      0x0000c2b7U /* NVC2B7_VIDEO_ENCODER (Pascal GP104) */
+
 #define OPEN_NVENC_RM_CTRL_FIFO_DEV_INFO_TABLE 0x20801112U
 #define OPEN_NVENC_RM_CTRL_VGPU_ENC_CAPACITY   0xa0820110U
 
-/* Status codes matching decompiled 0x11b3f0.c & 0x11f2b0.c */
+/* Status codes */
 typedef enum _NVENCSTATUS {
     NV_ENC_SUCCESS                      = 0,
     NV_ENC_ERR_NO_ENCODE_DEVICE         = 1,
@@ -115,11 +124,17 @@ typedef enum _NV_ENC_BUFFER_FORMAT {
     NV_ENC_BUFFER_FORMAT_ABGR10       = 0x20000000U
 } NV_ENC_BUFFER_FORMAT;
 
+typedef enum _NV_ENC_BIT_DEPTH {
+    NV_ENC_BIT_DEPTH_INVALID = 0,
+    NV_ENC_BIT_DEPTH_8       = 8,
+    NV_ENC_BIT_DEPTH_10      = 10
+} NV_ENC_BIT_DEPTH;
+
 typedef enum _NV_ENC_INPUT_RESOURCE_TYPE {
-    NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX          = 0x0,
-    NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR    = 0x1,
-    NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY        = 0x2,
-    NV_ENC_INPUT_RESOURCE_TYPE_OPENGL_TEX       = 0x3
+    NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX       = 0x0,
+    NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR = 0x1,
+    NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY     = 0x2,
+    NV_ENC_INPUT_RESOURCE_TYPE_OPENGL_TEX    = 0x3
 } NV_ENC_INPUT_RESOURCE_TYPE;
 
 typedef enum _NV_ENC_PIC_TYPE {
@@ -134,10 +149,10 @@ typedef enum _NV_ENC_PIC_TYPE {
 } NV_ENC_PIC_TYPE;
 
 typedef enum _NV_ENC_PIC_FLAGS {
-    NV_ENC_PIC_FLAG_FORCEINTRA         = 0x01U,
-    NV_ENC_PIC_FLAG_FORCEIDR           = 0x02U,
-    NV_ENC_PIC_FLAG_OUTPUT_SPSPPS      = 0x04U,
-    NV_ENC_PIC_FLAG_EOS                = 0x08U
+    NV_ENC_PIC_FLAG_FORCEINTRA    = 0x01U,
+    NV_ENC_PIC_FLAG_FORCEIDR      = 0x02U,
+    NV_ENC_PIC_FLAG_OUTPUT_SPSPPS = 0x04U,
+    NV_ENC_PIC_FLAG_EOS           = 0x08U
 } NV_ENC_PIC_FLAGS;
 
 typedef enum _NV_ENC_CAPS {
@@ -237,6 +252,12 @@ typedef void *NV_ENC_OUTPUT_PTR;
 typedef void *NV_ENC_REGISTERED_PTR;
 typedef void *NV_ENC_CUSTREAM_PTR;
 
+typedef struct _NV_ENC_QP {
+    uint32_t qpInterP;
+    uint32_t qpInterB;
+    uint32_t qpIntra;
+} NV_ENC_QP;
+
 typedef struct _NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
     uint32_t           version;
     NV_ENC_DEVICE_TYPE deviceType;
@@ -294,70 +315,158 @@ typedef struct _NV_ENC_CONFIG_H264 {
     uint32_t reserved1[260];
 } NV_ENC_CONFIG_H264;
 
+typedef struct _NV_ENC_CONFIG_HEVC_VUI_PARAMETERS {
+    uint32_t overscanInfoPresentFlag;
+    uint32_t overscanInfo;
+    uint32_t videoSignalTypePresentFlag;
+    uint32_t videoFormat;
+    uint32_t videoFullRangeFlag;
+    uint32_t colourDescriptionPresentFlag;
+    uint32_t colourPrimaries;
+    uint32_t transferCharacteristics;
+    uint32_t colourMatrix;
+    uint32_t chromaSampleLocationFlag;
+    uint32_t chromaSampleLocationTop;
+    uint32_t chromaSampleLocationBot;
+    uint32_t bitstreamRestrictionFlag;
+    uint32_t timingInfoPresentFlag;
+    uint32_t numUnitInTicks;
+    uint32_t timeScale;
+    uint32_t reserved[12];
+} NV_ENC_CONFIG_HEVC_VUI_PARAMETERS;
+
+/*
+ * Exact upstream x86_64 NVENC 13.0 layout:
+ *   sizeof(NV_ENC_CONFIG_HEVC) == 1560
+ *   offsetof(outputBitDepth)   == 200
+ *   offsetof(inputBitDepth)    == 204
+ * Note: bits 11..13 at +0x10 preserve pixelBitDepthMinus8 alias for 12.1 callers.
+ */
 typedef struct _NV_ENC_CONFIG_HEVC {
     uint32_t level;
     uint32_t tier;
     uint32_t minCUSize;
     uint32_t maxCUSize;
     uint32_t useConstrainedIntraPred : 1;
-    uint32_t disableDeblockingFilter : 1;
+    uint32_t disableDeblockAcrossSliceBoundary : 1;
     uint32_t outputBufferingPeriodSEI : 1;
     uint32_t outputPictureTimingSEI : 1;
     uint32_t outputAUD : 1;
-    uint32_t enableIntraRefresh : 1;
-    uint32_t enableDynamicSliceMode : 1;
-    uint32_t enableConstrainedEncoding : 1;
-    uint32_t enableSAO : 1;
+    uint32_t enableLTR : 1;
     uint32_t disableSPSPPS : 1;
     uint32_t repeatSPSPPS : 1;
-    uint32_t enableLTR : 1;
+    uint32_t enableIntraRefresh : 1;
     uint32_t chromaFormatIDC : 2; /* 1 = 4:2:0, 3 = 4:4:4 (YUV444) */
-    uint32_t pixelBitDepthMinus8 : 3; /* 0 = 8-bit, 2 = 10-bit */
+    uint32_t pixelBitDepthMinus8 : 3; /* Legacy 12.1 field / 13.0 reserved3 */
     uint32_t enableFillerDataInsertion : 1;
-    uint32_t reserved : 14;
+    uint32_t enableConstrainedEncoding : 1;
+    uint32_t enableAlphaLayerEncoding : 1;
+    uint32_t singleSliceIntraRefresh : 1;
+    uint32_t outputRecoveryPointSEI : 1;
+    uint32_t outputTimeCodeSEI : 1;
+    uint32_t enableTemporalSVC : 1;
+    uint32_t enableMVHEVC : 1;
+    uint32_t outputHevc3DReferenceDisplayInfo : 1;
+    uint32_t outputMaxCll : 1;
+    uint32_t outputMasteringDisplay : 1;
+    uint32_t reserved0 : 1;
+    uint32_t enableRefPicListModification : 1;
+    uint32_t reserved : 5;
     uint32_t idrPeriod;
     uint32_t intraRefreshPeriod;
     uint32_t intraRefreshCnt;
     uint32_t maxNumRefFramesInDPB;
+    uint32_t ltrNumFrames;
+    uint32_t vpsId;
+    uint32_t spsId;
+    uint32_t ppsId;
     uint32_t sliceMode;
     uint32_t sliceModeData;
     uint32_t maxTemporalLayersMinus1;
-    uint32_t spsId;
-    uint32_t ppsId;
-    uint32_t reserved1[264];
+    NV_ENC_CONFIG_HEVC_VUI_PARAMETERS hevcVUIParameters;
+    uint32_t ltrTrustMode;
+    uint32_t useBFramesAsRef;
+    uint32_t numRefL0;
+    uint32_t numRefL1;
+    uint32_t tfLevel;
+    uint32_t disableDeblockingFilterIDC;
+    NV_ENC_BIT_DEPTH outputBitDepth;
+    NV_ENC_BIT_DEPTH inputBitDepth;
+    uint32_t numTemporalLayers;
+    uint32_t numViews;
+    uint32_t reserved1[208];
+    void    *reserved2[64];
 } NV_ENC_CONFIG_HEVC;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 128 */
 typedef struct _NV_ENC_RC_PARAMS {
-    uint32_t version;
-    uint32_t rateControlMode;
-    uint32_t constQP_I;
-    uint32_t constQP_P;
-    uint32_t constQP_B;
-    uint32_t averageBitRate;
-    uint32_t maxBitRate;
-    uint32_t vbvBufferSize;
-    uint32_t vbvInitialDelay;
-    uint32_t reserved[32];
+    uint32_t  version;
+    uint32_t  rateControlMode;
+    NV_ENC_QP constQP;
+    uint32_t  averageBitRate;
+    uint32_t  maxBitRate;
+    uint32_t  vbvBufferSize;
+    uint32_t  vbvInitialDelay;
+    uint32_t  enableMinQP : 1;
+    uint32_t  enableMaxQP : 1;
+    uint32_t  enableInitialRCQP : 1;
+    uint32_t  enableAQ : 1;
+    uint32_t  reservedBitField1 : 1;
+    uint32_t  enableLookahead : 1;
+    uint32_t  disableIadapt : 1;
+    uint32_t  disableBadapt : 1;
+    uint32_t  enableTemporalAQ : 1;
+    uint32_t  zeroReorderDelay : 1;
+    uint32_t  enableNonRefP : 1;
+    uint32_t  strictGOPTarget : 1;
+    uint32_t  aqStrength : 4;
+    uint32_t  enableExtLookahead : 1;
+    uint32_t  reservedBitFields : 15;
+    NV_ENC_QP minQP;
+    NV_ENC_QP maxQP;
+    NV_ENC_QP initialRCQP;
+    uint32_t  temporallayerIdxMask;
+    uint8_t   temporalLayerQP[8];
+    uint8_t   targetQuality;
+    uint8_t   targetQualityLSB;
+    uint16_t  lookaheadDepth;
+    uint8_t   lowDelayKeyFrameScale;
+    int8_t    yDcQPIndexOffset;
+    int8_t    uDcQPIndexOffset;
+    int8_t    vDcQPIndexOffset;
+    uint32_t  qpMapMode;
+    uint32_t  multiPass;
+    uint32_t  alphaLayerBitrateRatio;
+    int8_t    cbQPIndexOffset;
+    int8_t    crQPIndexOffset;
+    uint16_t  reserved2;
+    uint32_t  lookaheadLevel;
+    uint8_t   viewBitrateRatios[7];
+    uint8_t   reserved3;
+    uint32_t  reserved1;
 } NV_ENC_RC_PARAMS;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 3584, rcParams == 40, encodeCodecConfig == 168 */
 typedef struct _NV_ENC_CONFIG {
-    uint32_t          version;
-    NVENC_GUID        profileGUID;
-    uint32_t          gopLength;
-    int32_t           frameIntervalP;
-    uint32_t          monoChromeEncoding;
-    uint32_t          frameFieldMode;
-    uint32_t          mvPrecision;
-    NV_ENC_RC_PARAMS  rcParams;
+    uint32_t         version;
+    NVENC_GUID       profileGUID;
+    uint32_t         gopLength;
+    int32_t          frameIntervalP;
+    uint32_t         monoChromeEncoding;
+    uint32_t         frameFieldMode;
+    uint32_t         mvPrecision;
+    NV_ENC_RC_PARAMS rcParams;
     union {
         NV_ENC_CONFIG_H264 h264Config;
         NV_ENC_CONFIG_HEVC hevcConfig;
         uint32_t           reserved[320];
+        uint32_t           av1SizePad[448]; /* matches AV1 union member size (1792 B) */
     } encodeCodecConfig;
-    uint32_t          reserved[278];
-    void             *reserved2[64];
+    uint32_t reserved[278];
+    void    *reserved2[64];
 } NV_ENC_CONFIG;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 5128, presetCfg == 8 */
 typedef struct _NV_ENC_PRESET_CONFIG {
     uint32_t      version;
     NV_ENC_CONFIG presetCfg;
@@ -365,6 +474,17 @@ typedef struct _NV_ENC_PRESET_CONFIG {
     void         *reserved2[64];
 } NV_ENC_PRESET_CONFIG;
 
+typedef struct _NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE {
+    uint32_t numCandsPerBlk16x16 : 4;
+    uint32_t numCandsPerBlk16x8  : 4;
+    uint32_t numCandsPerBlk8x16  : 4;
+    uint32_t numCandsPerBlk8x8   : 4;
+    uint32_t numCandsPerSb       : 8;
+    uint32_t reserved            : 8;
+    uint32_t reserved1[3];
+} NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE;
+
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 1800, encodeConfig == 88, tuningInfo == 136, bufferFormat == 140 */
 typedef struct _NV_ENC_INITIALIZE_PARAMS {
     uint32_t           version;
     NVENC_GUID         encodeGUID;
@@ -385,16 +505,21 @@ typedef struct _NV_ENC_INITIALIZE_PARAMS {
     uint32_t           splitEncodeMode : 4;
     uint32_t           enableOutputInVidmem : 1;
     uint32_t           enableReconFrameOutput : 1;
-    uint32_t           reservedBitFields : 21;
+    uint32_t           enableOutputStats : 1;
+    uint32_t           enableUniDirectionalB : 1;
+    uint32_t           reservedBitFields : 19;
     uint32_t           privDataSize;
+    uint32_t           reserved;
     void              *privData;
     NV_ENC_CONFIG     *encodeConfig;
     uint32_t           maxEncodeWidth;
     uint32_t           maxEncodeHeight;
-    uint32_t           maxMEHintCountsPerBlock[2];
+    NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE maxMEHintCountsPerBlock[2];
     NV_ENC_TUNING_INFO tuningInfo;
     NV_ENC_BUFFER_FORMAT bufferFormat;
-    uint32_t           reserved[287];
+    uint32_t           numStateBuffers;
+    uint32_t           outputStatsLevel;
+    uint32_t           reserved1[284];
     void              *reserved2[64];
 } NV_ENC_INITIALIZE_PARAMS;
 
@@ -433,6 +558,7 @@ typedef struct _NV_ENC_CREATE_BITSTREAM_BUFFER {
     void             *reserved2[64];
 } NV_ENC_CREATE_BITSTREAM_BUFFER;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 1544, outputBitstream == 8, bitstreamSizeInBytes == 36, bitstreamBufferPtr == 56, pictureType == 64 */
 typedef struct _NV_ENC_LOCK_BITSTREAM {
     uint32_t          version;
     uint32_t          doNotWait : 1;
@@ -454,12 +580,22 @@ typedef struct _NV_ENC_LOCK_BITSTREAM {
     uint32_t          frameSatd;
     uint32_t          ltrFrameIdx;
     uint32_t          ltrFrameBitmap;
-    uint32_t           temporalId;
-    uint32_t          reserved[12];
+    uint32_t          temporalId;
+    uint32_t          intraMBCount;
+    uint32_t          interMBCount;
+    int32_t           averageMVX;
+    int32_t           averageMVY;
+    uint32_t          alphaLayerSizeInBytes;
+    uint32_t          outputStatsPtrSize;
+    uint32_t          reserved;
+    void             *outputStatsPtr;
+    uint32_t          frameIdxDisplay;
     uint32_t          reserved1[219];
-    void             *reserved2[64];
+    void             *reserved2[63];
+    uint32_t          reservedInternal[8];
 } NV_ENC_LOCK_BITSTREAM;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 3360, inputBuffer == 40, outputBitstream == 48, bufferFmt == 64, pictureType == 72 */
 typedef struct _NV_ENC_PIC_PARAMS {
     uint32_t             version;
     uint32_t             inputWidth;
@@ -475,10 +611,23 @@ typedef struct _NV_ENC_PIC_PARAMS {
     NV_ENC_BUFFER_FORMAT bufferFmt;
     uint32_t             pictureStruct;
     NV_ENC_PIC_TYPE      pictureType;
-    uint32_t             reserved1[246];
-    void                *reserved2[60];
+    uint32_t             pictureTypePad;
+    uint8_t              codecPicParams[1632];
+    int8_t              *qpDeltaMap;
+    uint32_t             qpDeltaMapSize;
+    uint32_t             reservedBitFields;
+    uint16_t             meHintRefPicDist[2];
+    int32_t              diffPicNumHint;
+    NV_ENC_INPUT_PTR     alphaBuffer;
+    void                *meExternalSbHints;
+    uint32_t             meSbHintsCount;
+    uint32_t             stateBufferIdx;
+    NV_ENC_OUTPUT_PTR    outputReconBuffer;
+    uint32_t             reserved3[284];
+    void                *reserved6[57];
 } NV_ENC_PIC_PARAMS;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 1536, resourceToRegister == 24, registeredResource == 32, bufferFormat == 40 */
 typedef struct _NV_ENC_REGISTER_RESOURCE {
     uint32_t                   version;
     NV_ENC_INPUT_RESOURCE_TYPE resourceType;
@@ -490,10 +639,14 @@ typedef struct _NV_ENC_REGISTER_RESOURCE {
     NV_ENC_REGISTERED_PTR      registeredResource;
     NV_ENC_BUFFER_FORMAT       bufferFormat;
     uint32_t                   bufferUsage;
-    uint32_t                   reserved1[247];
-    void                      *reserved2[62];
+    void                      *pInputFencePoint;
+    uint32_t                   chromaOffset[2];
+    uint32_t                   chromaOffsetIn[2];
+    uint32_t                   reserved1[244];
+    void                      *reserved2[61];
 } NV_ENC_REGISTER_RESOURCE;
 
+/* Exact upstream x86_64 NVENC 13.0 layout: sizeof == 1544, registeredResource == 16, mappedResource == 24, mappedBufferFmt == 32 */
 typedef struct _NV_ENC_MAP_INPUT_RESOURCE {
     uint32_t              version;
     uint32_t              subResourceIndex;
@@ -537,19 +690,7 @@ typedef struct _NV_ENC_SEQUENCE_PARAM_PAYLOAD {
     void     *reserved2[64];
 } NV_ENC_SEQUENCE_PARAM_PAYLOAD;
 
-/*
- * NV_ENCODE_API_FUNCTION_LIST - exact 64-bit function pointer table layout
- * verified from Ghidra 12.2 / rea@6.10.1 decompilation of 0x11b3f0.c
- * (NvEncodeAPICreateInstance in libnvidia-encode.so.535.309.01):
- *   +0x00: version (u32), reserved (u32)
- *   +0x08 (+2 u32):  nvEncOpenEncodeSession
- *   +0x10 (+4 u32):  nvEncGetEncodeGUIDCount
- *   +0x18 (+6 u32):  nvEncGetEncodeProfileGUIDCount
- *   +0x20 (+8 u32):  nvEncGetEncodeProfileGUIDs
- *   +0x28 (+10 u32): nvEncGetEncodeGUIDs
- *   ...
- *   +0x158 (+0x56 u32): nvEncLookaheadPicture
- */
+/* NV_ENCODE_API_FUNCTION_LIST - 43 slots at +0x08..+0x158 */
 typedef struct _NV_ENCODE_API_FUNCTION_LIST {
     uint32_t version;
     uint32_t reserved;
@@ -616,7 +757,7 @@ typedef struct _NV_TOOL_INTERFACE {
     uint64_t              reserved;
 } NV_TOOL_INTERFACE;
 
-/* All 10 exported ELF dynamic symbols of libnvidia-encode.so.535.309.01 */
+/* All 10 exported ELF dynamic symbols of libnvidia-encode.so */
 NVENCSTATUS  NvEncodeAPICreateInstance(NV_ENCODE_API_FUNCTION_LIST *functionList);
 NVENCSTATUS  NvEncodeAPIGetMaxSupportedVersion(uint32_t *version);
 void         NvToolSetInterface(void *iface);
@@ -642,6 +783,8 @@ typedef struct _open_nvenc_rm_stats {
     uint32_t rm_free_count;
     uint32_t frames_encoded;
     int      rm_connected;
+    int      hw_encode_active;
+    uint32_t last_hw_encoded_bits;
 } open_nvenc_rm_stats_t;
 
 uint32_t open_nvenc_decode_struct_version(uint32_t struct_ver, int *out_valid);

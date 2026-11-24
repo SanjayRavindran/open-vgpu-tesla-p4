@@ -34,6 +34,10 @@ static void test_version_decoder_and_max_version(void)
     assert(valid == 1);
     assert(v == 0x000000c1U);
 
+    v = open_nvenc_decode_struct_version(0x7002000dU, &valid);
+    assert(valid == 1);
+    assert(v == 0x000000d0U);
+
     /* Invalid tag 0 or 6 must set valid=0 */
     v = open_nvenc_decode_struct_version(0x0002000cU, &valid);
     assert(valid == 0);
@@ -43,7 +47,7 @@ static void test_version_decoder_and_max_version(void)
     assert(NvEncodeAPIGetMaxSupportedVersion(NULL) == NV_ENC_ERR_INVALID_PTR);
     uint32_t max_ver = 0U;
     assert(NvEncodeAPIGetMaxSupportedVersion(&max_ver) == NV_ENC_SUCCESS);
-    assert(max_ver == 0x000000c1U);
+    assert(max_ver == 0x000000d0U);
 }
 
 static void test_function_list_offsets_and_errors(void)
@@ -182,16 +186,17 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
                NV_ENC_TUNING_INFO_LOW_LATENCY, &preset_cfg) == NV_ENC_SUCCESS);
 
     preset_cfg.presetCfg.profileGUID = NV_ENC_HEVC_PROFILE_FREXT_GUID;
-    preset_cfg.presetCfg.encodeCodecConfig.hevcConfig.chromaFormatIDC      = 3U; /* 4:4:4 */
-    preset_cfg.presetCfg.encodeCodecConfig.hevcConfig.pixelBitDepthMinus8  = 2U; /* 10-bit */
+    preset_cfg.presetCfg.encodeCodecConfig.hevcConfig.chromaFormatIDC = 3U; /* 4:4:4 */
+    preset_cfg.presetCfg.encodeCodecConfig.hevcConfig.outputBitDepth  = NV_ENC_BIT_DEPTH_10;
+    preset_cfg.presetCfg.encodeCodecConfig.hevcConfig.inputBitDepth   = NV_ENC_BIT_DEPTH_10;
 
     NV_ENC_INITIALIZE_PARAMS init_params;
     memset(&init_params, 0, sizeof(init_params));
     init_params.version      = NV_ENC_INITIALIZE_PARAMS_VER;
     init_params.encodeGUID   = NV_ENC_CODEC_HEVC_GUID;
     init_params.presetGUID   = NV_ENC_PRESET_P4_GUID;
-    init_params.encodeWidth  = 1920U;
-    init_params.encodeHeight = 1080U;
+    init_params.encodeWidth  = 256U;
+    init_params.encodeHeight = 256U;
     init_params.frameRateNum = 60U;
     init_params.frameRateDen = 1U;
     init_params.tuningInfo   = NV_ENC_TUNING_INFO_LOW_LATENCY;
@@ -203,8 +208,8 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
     NV_ENC_CREATE_INPUT_BUFFER in_buf;
     memset(&in_buf, 0, sizeof(in_buf));
     in_buf.version   = NV_ENC_CREATE_INPUT_BUFFER_VER;
-    in_buf.width     = 1920U;
-    in_buf.height    = 1080U;
+    in_buf.width     = 256U;
+    in_buf.height    = 256U;
     in_buf.bufferFmt = NV_ENC_BUFFER_FORMAT_YUV444_10BIT;
     assert(fn.nvEncCreateInputBuffer(encoder, &in_buf) == NV_ENC_SUCCESS);
 
@@ -213,7 +218,7 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
     lock_in.version     = NV_ENC_LOCK_INPUT_BUFFER_VER;
     lock_in.inputBuffer = in_buf.inputBuffer;
     assert(fn.nvEncLockInputBuffer(encoder, &lock_in) == NV_ENC_SUCCESS);
-    assert(lock_in.bufferDataPtr != NULL && lock_in.pitch == 3840U);
+    assert(lock_in.bufferDataPtr != NULL && lock_in.pitch == 512U);
     assert(fn.nvEncUnlockInputBuffer(encoder, in_buf.inputBuffer) == NV_ENC_SUCCESS);
 
     NV_ENC_CREATE_BITSTREAM_BUFFER bs_buf;
@@ -225,8 +230,8 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
     NV_ENC_PIC_PARAMS pic;
     memset(&pic, 0, sizeof(pic));
     pic.version         = NV_ENC_PIC_PARAMS_VER;
-    pic.inputWidth      = 1920U;
-    pic.inputHeight     = 1080U;
+    pic.inputWidth      = 256U;
+    pic.inputHeight     = 256U;
     pic.inputPitch      = lock_in.pitch;
     pic.inputBuffer     = in_buf.inputBuffer;
     pic.outputBitstream = bs_buf.bitstreamBuffer;
@@ -284,7 +289,7 @@ static void test_vendor_differential_if_present(void)
     assert(v_get_ver(NULL) == NvEncodeAPIGetMaxSupportedVersion(NULL));
     uint32_t v_ver = 0U, o_ver = 0U;
     assert(v_get_ver(&v_ver) == NvEncodeAPIGetMaxSupportedVersion(&o_ver));
-    assert(v_ver == o_ver);
+    assert(o_ver >= v_ver && o_ver == 0x000000d0U);
 
     assert(v_create(NULL) == NvEncodeAPICreateInstance(NULL));
     NV_ENCODE_API_FUNCTION_LIST v_fn, o_fn;
@@ -292,9 +297,13 @@ static void test_vendor_differential_if_present(void)
     memset(&o_fn, 0, sizeof(o_fn));
     assert(v_create(&v_fn) == NvEncodeAPICreateInstance(&o_fn));
 
-    v_fn.version = NV_ENCODE_API_FUNCTION_LIST_VER;
-    o_fn.version = NV_ENCODE_API_FUNCTION_LIST_VER;
+    v_fn.version = (12U | (1U << 24) | (2U << 16) | (0x7U << 28)); /* vendor 12.1 (0x7102000c) */
+    o_fn.version = NV_ENCODE_API_FUNCTION_LIST_VER;                 /* open 13.0 (0x7002000d) */
     assert(v_create(&v_fn) == NV_ENC_SUCCESS);
+    assert(NvEncodeAPICreateInstance(&o_fn) == NV_ENC_SUCCESS);
+    /* Verify open also accepts 12.1 caller structs cleanly */
+    memset(&o_fn, 0, sizeof(o_fn));
+    o_fn.version = 0x7102000cU;
     assert(NvEncodeAPICreateInstance(&o_fn) == NV_ENC_SUCCESS);
 
     /* Every non-NULL function pointer slot in vendor table must be non-NULL in open table */
