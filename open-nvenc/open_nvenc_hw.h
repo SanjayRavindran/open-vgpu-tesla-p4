@@ -37,6 +37,8 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
 void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx,
                            open_nvenc_rm_stats_t *rm_stats);
 
+size_t open_nvenc_hw_get_bs_capacity(const open_nvenc_hw_ctx_t *ctx);
+
 void open_nvenc_hw_invalidate_refs(open_nvenc_hw_ctx_t *ctx);
 
 void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,

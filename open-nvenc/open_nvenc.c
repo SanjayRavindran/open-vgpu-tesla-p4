@@ -739,7 +739,9 @@ static void resolve_hevc_geometry(const open_nvenc_session_t *s,
     }
     *out_chroma = chroma;
     *out_depth  = depth;
-    *out_qp     = qp;
+    if (out_qp) {
+        *out_qp = qp;
+    }
     if (out_qp_p) {
         *out_qp_p = qp_p;
     }
@@ -943,6 +945,19 @@ static NVENCSTATUS impl_nvEncUnlockInputBuffer(void *encoder, NV_ENC_INPUT_PTR i
     return NV_ENC_SUCCESS;
 }
 
+static size_t compute_hw_bs_target_cap(const open_nvenc_hw_ctx_t *hw)
+{
+    const size_t max_cap = 32U * 1024U * 1024U;
+    size_t hw_cap = open_nvenc_hw_get_bs_capacity(hw);
+    if (hw_cap == 0U) {
+        return 0U;
+    }
+    if (hw_cap > max_cap - 4096U) {
+        return max_cap;
+    }
+    return hw_cap + 4096U;
+}
+
 static NVENCSTATUS impl_nvEncCreateBitstreamBuffer(
     void *encoder, NV_ENC_CREATE_BITSTREAM_BUFFER *params)
 {
@@ -957,8 +972,25 @@ static NVENCSTATUS impl_nvEncCreateBitstreamBuffer(
     if (!bs) {
         return NV_ENC_ERR_OUT_OF_MEMORY;
     }
+    const size_t min_cap = 4U * 1024U * 1024U;
+    const size_t max_cap = 32U * 1024U * 1024U;
+    uint32_t w = s->init_params.maxEncodeWidth ? s->init_params.maxEncodeWidth : s->init_params.encodeWidth;
+    uint32_t h = s->init_params.maxEncodeHeight ? s->init_params.maxEncodeHeight : s->init_params.encodeHeight;
+    size_t auto_cap = (size_t)w * (size_t)h * 2U;
+    if (auto_cap < min_cap) {
+        auto_cap = min_cap;
+    } else if (auto_cap > max_cap) {
+        auto_cap = max_cap;
+    }
+    if (s->hw) {
+        size_t hw_cap = compute_hw_bs_target_cap(s->hw);
+        if (hw_cap > auto_cap) {
+            auto_cap = hw_cap;
+        }
+    }
+
     bs->magic    = OPEN_NVENC_BSBUF_MAGIC;
-    bs->capacity = params->size ? params->size : 262144U;
+    bs->capacity = ((size_t)params->size > auto_cap) ? (size_t)params->size : auto_cap;
     bs->data     = (uint8_t *)calloc(1U, bs->capacity);
     if (!bs->data) {
         free(bs);
@@ -1058,6 +1090,17 @@ static NVENCSTATUS impl_nvEncEncodePicture(void *encoder, NV_ENC_PIC_PARAMS *par
 
     uint32_t avg_qp = s->config.rcParams.constQP.qpIntra ? s->config.rcParams.constQP.qpIntra : 24U;
     if (s->hw) {
+        if (!bs->locked) {
+            size_t need_cap = compute_hw_bs_target_cap(s->hw);
+            if (bs->capacity < need_cap) {
+                uint8_t *grown = (uint8_t *)realloc(bs->data, need_cap);
+                if (!grown) {
+                    return NV_ENC_ERR_OUT_OF_MEMORY;
+                }
+                bs->data     = grown;
+                bs->capacity = need_cap;
+            }
+        }
         uint32_t pitch = params->inputPitch ? params->inputPitch : ib->pitch;
         NV_ENC_BUFFER_FORMAT fmt = params->bufferFmt ? params->bufferFmt : ib->fmt;
         const uint32_t *co = ib->chroma_offset[0] ? ib->chroma_offset : NULL;
@@ -1579,6 +1622,8 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
     uint32_t prev_w   = s->init_params.encodeWidth;
     uint32_t prev_h   = s->init_params.encodeHeight;
     NV_ENC_BUFFER_FORMAT prev_fmt = s->init_params.bufferFormat;
+    uint32_t prev_chroma = 1U, prev_depth = 8U;
+    resolve_hevc_geometry(s, &prev_chroma, &prev_depth, NULL, NULL);
 
     s->init_params = params->reInitEncodeParams;
     if (params->reInitEncodeParams.encodeConfig) {
@@ -1587,10 +1632,14 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
     }
 
     if (s->hw) {
+        uint32_t new_chroma = 1U, new_depth = 8U;
+        resolve_hevc_geometry(s, &new_chroma, &new_depth, NULL, NULL);
         int need_recreate = (params->resetEncoder ||
                              s->init_params.encodeWidth != prev_w ||
                              s->init_params.encodeHeight != prev_h ||
-                             s->init_params.bufferFormat != prev_fmt) ? 1 : 0;
+                             s->init_params.bufferFormat != prev_fmt ||
+                             new_chroma != prev_chroma ||
+                             new_depth != prev_depth) ? 1 : 0;
         if (need_recreate) {
             open_nvenc_hw_destroy(s->hw, &s->rm);
             s->hw = NULL;

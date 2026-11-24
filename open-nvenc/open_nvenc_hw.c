@@ -1977,6 +1977,11 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
     }
 }
 
+size_t open_nvenc_hw_get_bs_capacity(const open_nvenc_hw_ctx_t *ctx)
+{
+    return ctx ? (size_t)ctx->bs_buf.size : 0U;
+}
+
 void open_nvenc_hw_invalidate_refs(open_nvenc_hw_ctx_t *ctx)
 {
     if (ctx) {
