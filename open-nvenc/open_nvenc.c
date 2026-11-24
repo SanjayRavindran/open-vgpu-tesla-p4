@@ -13,6 +13,7 @@
 #include "open_nvenc.h"
 #include "open_nvenc_hw.h"
 #include "open_nvenc_hevc_hdr.h"
+#include "open_nvenc_h264_hdr.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -171,6 +172,7 @@ typedef struct {
     NV_ENC_BUFFER_FORMAT fmt;
     uint8_t *data;
     size_t   size;
+    uint32_t chroma_offset[2];
     int      locked;
 } open_nvenc_input_buf_t;
 
@@ -183,6 +185,7 @@ typedef struct {
     NV_ENC_PIC_TYPE pic_type;
     uint64_t timestamp;
     uint64_t duration;
+    uint32_t avg_qp;
     int      locked;
 } open_nvenc_bitstream_buf_t;
 
@@ -192,6 +195,7 @@ typedef struct {
     open_nvenc_input_buf_t   mapped_buf;
     size_t                   cuda_host_size;
     int                      is_cuda_devptr;
+    int                      is_cuda_array;
 } open_nvenc_reg_res_t;
 
 #define OPEN_NVENC_SESSION_MAGIC   0x4e564543U /* "NVEC" */
@@ -211,6 +215,8 @@ typedef struct {
     int                      ctl_fd;
     int                      dev_fd;
     open_nvenc_hw_ctx_t     *hw;
+    void                    *in_cuda_stream;
+    void                    *out_cuda_stream;
     open_nvenc_rm_stats_t    rm;
     char                     last_error[128];
 } open_nvenc_session_t;
@@ -517,9 +523,9 @@ static NVENCSTATUS impl_nvEncGetEncodeCaps(
         return NV_ENC_ERR_INVALID_PARAM;
     }
 
-    switch (capsParam->capsToQuery) {
+    switch ((int)capsParam->capsToQuery) {
         case NV_ENC_CAPS_NUM_MAX_BFRAMES:
-            *capsVal = is_h264 ? 4 : 0; /* Pascal GP104 supports B-frames on H.264 */
+            *capsVal = 0; /* Low-latency GP104 I/P path */
             break;
         case NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES:
             *capsVal = 0x3f; /* ConstQP, VBR, CBR, CBR_LOWDELAY_HQ, CBR_HQ, VBR_HQ */
@@ -547,6 +553,14 @@ static NVENCSTATUS impl_nvEncGetEncodeCaps(
         case NV_ENC_CAPS_LEVEL_MIN:
             *capsVal = 10;
             break;
+        case NV_ENC_CAPS_SUPPORT_LOOKAHEAD:
+        case NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ:
+        case NV_ENC_CAPS_SUPPORT_WEIGHTED_PREDICTION:
+            *capsVal = 0;
+            break;
+        case 54: /* NV_ENC_CAPS_NUM_ENCODER_ENGINES */
+            *capsVal = 2;
+            break;
         case NV_ENC_CAPS_SUPPORT_DYN_RES_CHANGE:
         case NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE:
         case NV_ENC_CAPS_SUPPORT_DYN_FORCE_CONSTQP:
@@ -554,9 +568,6 @@ static NVENCSTATUS impl_nvEncGetEncodeCaps(
         case NV_ENC_CAPS_SUPPORT_INTRA_REFRESH:
         case NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE:
         case NV_ENC_CAPS_SUPPORT_REF_PIC_INVALIDATION:
-        case NV_ENC_CAPS_SUPPORT_LOOKAHEAD:
-        case NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ:
-        case NV_ENC_CAPS_SUPPORT_WEIGHTED_PREDICTION:
         case NV_ENC_CAPS_SUPPORT_CABAC:
         case NV_ENC_CAPS_SUPPORT_ADAPTIVE_TRANSFORM:
             *capsVal = 1;
@@ -677,20 +688,29 @@ static void resolve_hevc_geometry(const open_nvenc_session_t *s,
     uint32_t qp     = 24U;
     uint32_t qp_p   = 24U;
 
-    const NV_ENC_CONFIG_HEVC *hc = &s->config.encodeCodecConfig.hevcConfig;
-    if (hc->chromaFormatIDC == 3U ||
-        s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444 ||
-        s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT ||
-        guid_eq(&s->config.profileGUID, &NV_ENC_HEVC_PROFILE_FREXT_GUID)) {
-        chroma = 3U;
-    }
-    if (hc->outputBitDepth == NV_ENC_BIT_DEPTH_10 ||
-        hc->inputBitDepth == NV_ENC_BIT_DEPTH_10 ||
-        hc->pixelBitDepthMinus8 == 2U ||
-        s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT ||
-        s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT ||
-        guid_eq(&s->config.profileGUID, &NV_ENC_HEVC_PROFILE_MAIN10_GUID)) {
-        depth = 10U;
+    if (s->is_hevc) {
+        const NV_ENC_CONFIG_HEVC *hc = &s->config.encodeCodecConfig.hevcConfig;
+        if (hc->chromaFormatIDC == 3U ||
+            s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444 ||
+            s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT ||
+            guid_eq(&s->config.profileGUID, &NV_ENC_HEVC_PROFILE_FREXT_GUID)) {
+            chroma = 3U;
+        }
+        if (hc->outputBitDepth == NV_ENC_BIT_DEPTH_10 ||
+            hc->inputBitDepth == NV_ENC_BIT_DEPTH_10 ||
+            hc->pixelBitDepthMinus8 == 2U ||
+            s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT ||
+            s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT ||
+            guid_eq(&s->config.profileGUID, &NV_ENC_HEVC_PROFILE_MAIN10_GUID)) {
+            depth = 10U;
+        }
+    } else {
+        const NV_ENC_CONFIG_H264 *ac = &s->config.encodeCodecConfig.h264Config;
+        if (ac->chromaFormatIDC == 3U ||
+            s->init_params.bufferFormat == NV_ENC_BUFFER_FORMAT_YUV444 ||
+            guid_eq(&s->config.profileGUID, &NV_ENC_H264_PROFILE_HIGH_444_GUID)) {
+            chroma = 3U;
+        }
     }
     if (s->config.rcParams.constQP.qpIntra != 0U && s->config.rcParams.constQP.qpIntra <= 51U) {
         qp = s->config.rcParams.constQP.qpIntra;
@@ -706,6 +726,30 @@ static void resolve_hevc_geometry(const open_nvenc_session_t *s,
     if (out_qp_p) {
         *out_qp_p = qp_p;
     }
+}
+
+static void fill_hw_cfg_from_session(const open_nvenc_session_t *s,
+                                     open_nvenc_hw_init_cfg_t *hw_cfg)
+{
+    memset(hw_cfg, 0, sizeof(*hw_cfg));
+    hw_cfg->width           = s->init_params.encodeWidth;
+    hw_cfg->height          = s->init_params.encodeHeight;
+    hw_cfg->gop_length      = s->config.gopLength;
+    hw_cfg->is_h264         = s->is_hevc ? 0 : 1;
+    hw_cfg->rc_mode         = s->config.rcParams.rateControlMode;
+    hw_cfg->average_bitrate = s->config.rcParams.averageBitRate;
+    hw_cfg->max_bitrate     = s->config.rcParams.maxBitRate;
+    hw_cfg->vbv_buffer_size = s->config.rcParams.vbvBufferSize;
+    hw_cfg->fps_num         = s->init_params.frameRateNum;
+    hw_cfg->fps_den         = s->init_params.frameRateDen;
+    if (s->config.rcParams.enableMinQP && s->config.rcParams.minQP.qpInterP > 0U) {
+        hw_cfg->min_qp = s->config.rcParams.minQP.qpInterP;
+    }
+    if (s->config.rcParams.enableMaxQP && s->config.rcParams.maxQP.qpInterP > 0U) {
+        hw_cfg->max_qp = s->config.rcParams.maxQP.qpInterP;
+    }
+    resolve_hevc_geometry(s, &hw_cfg->chroma_format_idc, &hw_cfg->bit_depth,
+                          &hw_cfg->qp, &hw_cfg->qp_p);
 }
 
 static NVENCSTATUS impl_nvEncInitializeEncoder(
@@ -744,14 +788,9 @@ static NVENCSTATUS impl_nvEncInitializeEncoder(
     }
 
     const char *offline = getenv("OPEN_NVENC_OFFLINE_MOCK");
-    if (is_hevc && s->ctl_fd >= 0 && s->dev_fd >= 0 && (!offline || !offline[0])) {
+    if ((is_hevc || is_h264) && s->ctl_fd >= 0 && s->dev_fd >= 0 && (!offline || !offline[0])) {
         open_nvenc_hw_init_cfg_t hw_cfg;
-        memset(&hw_cfg, 0, sizeof(hw_cfg));
-        hw_cfg.width      = createEncodeParams->encodeWidth;
-        hw_cfg.height     = createEncodeParams->encodeHeight;
-        hw_cfg.gop_length = s->config.gopLength;
-        resolve_hevc_geometry(s, &hw_cfg.chroma_format_idc, &hw_cfg.bit_depth,
-                              &hw_cfg.qp, &hw_cfg.qp_p);
+        fill_hw_cfg_from_session(s, &hw_cfg);
 
         if (open_nvenc_hw_create(&s->hw, s->ctl_fd, s->dev_fd, &hw_cfg, &s->rm,
                                  s->last_error, sizeof(s->last_error)) < 0) {
@@ -762,8 +801,9 @@ static NVENCSTATUS impl_nvEncInitializeEncoder(
 
     s->initialized = 1;
     trace_nvenc_event("nvEncInitializeEncoder", NV_ENC_SUCCESS,
-                      s->hw ? "GP104 NVC2B7 HEVC HW initialized"
-                            : (is_hevc ? "HEVC offline initialized" : "H264 initialized"));
+                      s->hw ? (is_hevc ? "GP104 NVC2B7 HEVC HW initialized"
+                                       : "GP104 NVC2B7 H264 HW initialized")
+                            : (is_hevc ? "HEVC offline initialized" : "H264 offline initialized"));
     return NV_ENC_SUCCESS;
 }
 
@@ -974,20 +1014,23 @@ static NVENCSTATUS impl_nvEncEncodePicture(void *encoder, NV_ENC_PIC_PARAMS *par
     int emit_spspps = (params->encodePicFlags & NV_ENC_PIC_FLAG_OUTPUT_SPSPPS) ? 1 : 0;
     int is_idr      = (force_idr || force_intra) ? 1 : 0;
 
+    uint32_t avg_qp = s->config.rcParams.constQP.qpIntra ? s->config.rcParams.constQP.qpIntra : 24U;
     if (s->hw) {
         uint32_t pitch = params->inputPitch ? params->inputPitch : ib->pitch;
         NV_ENC_BUFFER_FORMAT fmt = params->bufferFmt ? params->bufferFmt : ib->fmt;
+        const uint32_t *co = ib->chroma_offset[0] ? ib->chroma_offset : NULL;
         NVENCSTATUS st = open_nvenc_hw_encode_frame(
-            s->hw, ib->data, pitch, fmt,
+            s->hw, ib->data, pitch, fmt, co,
             is_idr, emit_spspps,
             bs->data, bs->capacity, &bs->valid_bytes,
-            &is_idr, &s->rm, s->last_error, sizeof(s->last_error));
+            &is_idr, &avg_qp, &s->rm, s->last_error, sizeof(s->last_error));
         if (st != NV_ENC_SUCCESS) {
             return st;
         }
     } else if (s->is_hevc) {
         uint32_t chroma = 1U, depth = 8U, qp = 24U;
         resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
+        avg_qp = qp;
         uint32_t gop = s->config.gopLength;
         if (s->rm.frames_encoded == 0U || (gop > 0U && (s->rm.frames_encoded % gop) == 0U)) {
             is_idr = 1;
@@ -1024,6 +1067,7 @@ static NVENCSTATUS impl_nvEncEncodePicture(void *encoder, NV_ENC_PIC_PARAMS *par
     bs->pic_type  = is_idr ? NV_ENC_PIC_TYPE_IDR : NV_ENC_PIC_TYPE_P;
     bs->timestamp = params->inputTimeStamp;
     bs->duration  = params->inputDuration;
+    bs->avg_qp    = avg_qp;
     return NV_ENC_SUCCESS;
 }
 
@@ -1045,7 +1089,7 @@ static NVENCSTATUS impl_nvEncLockBitstream(
     params->outputTimeStamp      = bs->timestamp;
     params->outputDuration       = bs->duration;
     params->numSlices            = 1U;
-    params->frameAvgQP           = 22U;
+    params->frameAvgQP           = bs->avg_qp ? bs->avg_qp : 22U;
     return NV_ENC_SUCCESS;
 }
 
@@ -1093,6 +1137,18 @@ static NVENCSTATUS impl_nvEncGetSequenceParams(
             *payload->outSPSPPSPayloadSize = (uint32_t)n;
             return NV_ENC_SUCCESS;
         }
+    } else {
+        uint32_t chroma = 1U, depth = 8U, qp = 24U;
+        resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
+        size_t n = open_nvenc_h264_write_headers(
+            (uint8_t *)payload->spsppsBuffer, payload->inBufferSize,
+            s->init_params.encodeWidth ? s->init_params.encodeWidth : 256U,
+            s->init_params.encodeHeight ? s->init_params.encodeHeight : 256U,
+            chroma);
+        if (n > 0U) {
+            *payload->outSPSPPSPayloadSize = (uint32_t)n;
+            return NV_ENC_SUCCESS;
+        }
     }
     size_t n = write_nal_bitstream(s, (uint8_t *)payload->spsppsBuffer, payload->inBufferSize, 0);
     *payload->outSPSPPSPayloadSize = (uint32_t)n;
@@ -1116,20 +1172,65 @@ static NVENCSTATUS impl_nvEncUnregisterAsyncEvent(void *encoder, void *eventPara
     return as_session(encoder) ? NV_ENC_SUCCESS : NV_ENC_ERR_INVALID_PTR;
 }
 
-static size_t compute_registered_buffer_size(uint32_t pitch, uint32_t height, NV_ENC_BUFFER_FORMAT fmt)
+static size_t compute_registered_buffer_size(uint32_t pitch, uint32_t height,
+                                             NV_ENC_BUFFER_FORMAT fmt,
+                                             const uint32_t chroma_offset[2])
 {
+    size_t base_sz;
     switch (fmt) {
         case NV_ENC_BUFFER_FORMAT_YUV444:
         case NV_ENC_BUFFER_FORMAT_YUV444_10BIT:
-            return (size_t)pitch * (size_t)height * 3U;
+            base_sz = (size_t)pitch * (size_t)height * 3U;
+            if (chroma_offset && chroma_offset[1] > 0U) {
+                size_t co_sz = (size_t)chroma_offset[1] + (size_t)pitch * (size_t)height;
+                if (co_sz > base_sz) {
+                    base_sz = co_sz;
+                }
+            }
+            return base_sz;
         case NV_ENC_BUFFER_FORMAT_NV12:
+        case NV_ENC_BUFFER_FORMAT_YUV420_10BIT:
+            base_sz = ((size_t)pitch * (size_t)height * 3U) / 2U;
+            if (chroma_offset && chroma_offset[0] > 0U) {
+                size_t co_sz = (size_t)chroma_offset[0] + ((size_t)pitch * (size_t)height) / 2U;
+                if (co_sz > base_sz) {
+                    base_sz = co_sz;
+                }
+            }
+            return base_sz;
         case NV_ENC_BUFFER_FORMAT_YV12:
         case NV_ENC_BUFFER_FORMAT_IYUV:
-        case NV_ENC_BUFFER_FORMAT_YUV420_10BIT:
-            return ((size_t)pitch * (size_t)height * 3U) / 2U;
+            base_sz = ((size_t)pitch * (size_t)height * 3U) / 2U;
+            if (chroma_offset && chroma_offset[1] > 0U) {
+                size_t co_sz = (size_t)chroma_offset[1] + ((size_t)pitch * (size_t)height) / 4U;
+                if (co_sz > base_sz) {
+                    base_sz = co_sz;
+                }
+            }
+            return base_sz;
         default:
             return (size_t)pitch * (size_t)height;
     }
+}
+
+static void *lookup_cuda_sym(const char *sym1, const char *sym2, void **out_dl)
+{
+    *out_dl = NULL;
+    void *fn = dlsym(RTLD_DEFAULT, sym1);
+    if (!fn && sym2) {
+        fn = dlsym(RTLD_DEFAULT, sym2);
+    }
+    if (!fn) {
+        void *cu_dl = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_NOLOAD);
+        if (cu_dl) {
+            fn = dlsym(cu_dl, sym1);
+            if (!fn && sym2) {
+                fn = dlsym(cu_dl, sym2);
+            }
+            *out_dl = cu_dl;
+        }
+    }
+    return fn;
 }
 
 static NVENCSTATUS impl_nvEncRegisterResource(
@@ -1150,10 +1251,14 @@ static NVENCSTATUS impl_nvEncRegisterResource(
     rr->mapped_buf.height  = params->height ? params->height : s->init_params.encodeHeight;
     rr->mapped_buf.fmt     = params->bufferFormat ? params->bufferFormat : NV_ENC_BUFFER_FORMAT_NV12;
     rr->mapped_buf.pitch   = params->pitch ? params->pitch : (uint32_t)compute_input_pitch(rr->mapped_buf.width, rr->mapped_buf.fmt);
-    if (params->resourceType == NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR) {
+    rr->mapped_buf.chroma_offset[0] = params->chromaOffset[0];
+    rr->mapped_buf.chroma_offset[1] = params->chromaOffset[1];
+    if (params->resourceType == NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR ||
+        params->resourceType == NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY) {
         size_t sz = compute_registered_buffer_size(rr->mapped_buf.pitch,
                                                    rr->mapped_buf.height,
-                                                   rr->mapped_buf.fmt);
+                                                   rr->mapped_buf.fmt,
+                                                   params->chromaOffset);
         rr->cuda_host_size  = sz ? sz : 4096U;
         rr->mapped_buf.data = (uint8_t *)calloc(1U, rr->cuda_host_size);
         if (!rr->mapped_buf.data) {
@@ -1161,7 +1266,11 @@ static NVENCSTATUS impl_nvEncRegisterResource(
             return NV_ENC_ERR_OUT_OF_MEMORY;
         }
         rr->mapped_buf.size = rr->cuda_host_size;
-        rr->is_cuda_devptr  = 1;
+        if (params->resourceType == NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR) {
+            rr->is_cuda_devptr = 1;
+        } else {
+            rr->is_cuda_array  = 1;
+        }
     } else {
         rr->mapped_buf.data = (uint8_t *)params->resourceToRegister;
     }
@@ -1179,7 +1288,7 @@ static NVENCSTATUS impl_nvEncUnregisterResource(
     if (rr->magic != OPEN_NVENC_REGRES_MAGIC) {
         return NV_ENC_ERR_INVALID_PARAM;
     }
-    if (rr->is_cuda_devptr && rr->mapped_buf.data) {
+    if ((rr->is_cuda_devptr || rr->is_cuda_array) && rr->mapped_buf.data) {
         free(rr->mapped_buf.data);
         rr->mapped_buf.data = NULL;
     }
@@ -1187,6 +1296,25 @@ static NVENCSTATUS impl_nvEncUnregisterResource(
     free(rr);
     return NV_ENC_SUCCESS;
 }
+
+typedef struct {
+    size_t      srcXInBytes;
+    size_t      srcY;
+    int         srcMemoryType;
+    const void *srcHost;
+    uint64_t    srcDevice;
+    void       *srcArray;
+    size_t      srcPitch;
+    size_t      dstXInBytes;
+    size_t      dstY;
+    int         dstMemoryType;
+    void       *dstHost;
+    uint64_t    dstDevice;
+    void       *dstArray;
+    size_t      dstPitch;
+    size_t      WidthInBytes;
+    size_t      Height;
+} open_cu_memcpy2d_t;
 
 static NVENCSTATUS impl_nvEncMapInputResource(
     void *encoder, NV_ENC_MAP_INPUT_RESOURCE *params)
@@ -1199,32 +1327,89 @@ static NVENCSTATUS impl_nvEncMapInputResource(
     if (rr->magic != OPEN_NVENC_REGRES_MAGIC) {
         return NV_ENC_ERR_INVALID_PARAM;
     }
-    if (rr->is_cuda_devptr && rr->reg.resourceToRegister && rr->cuda_host_size > 0U) {
+    if ((rr->is_cuda_devptr || rr->is_cuda_array) && rr->reg.resourceToRegister && rr->cuda_host_size > 0U) {
+        typedef int (*cu_ctx_get_cur_fn_t)(void **pctx);
+        typedef int (*cu_ctx_push_fn_t)(void *ctx);
+        typedef int (*cu_ctx_pop_fn_t)(void **pctx);
+        typedef int (*cu_stream_sync_fn_t)(void *hStream);
         typedef int (*cu_memcpy_dtoh_fn_t)(void *dstHost, uint64_t srcDevice, size_t byteCount);
-        cu_memcpy_dtoh_fn_t cu_dtoh = (cu_memcpy_dtoh_fn_t)dlsym(RTLD_DEFAULT, "cuMemcpyDtoH_v2");
-        if (!cu_dtoh) {
-            void *cu_dl = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_NOLOAD);
-            if (cu_dl) {
-                cu_dtoh = (cu_memcpy_dtoh_fn_t)dlsym(cu_dl, "cuMemcpyDtoH_v2");
-                if (!cu_dtoh) {
-                    cu_dtoh = (cu_memcpy_dtoh_fn_t)dlsym(cu_dl, "cuMemcpyDtoH");
+        typedef int (*cu_memcpy_2d_fn_t)(const open_cu_memcpy2d_t *pCopy);
+
+        void *dl1 = NULL, *dl2 = NULL, *dl3 = NULL, *dl4 = NULL, *dl5 = NULL, *dl6 = NULL;
+        cu_ctx_get_cur_fn_t cu_get_ctx = (cu_ctx_get_cur_fn_t)lookup_cuda_sym("cuCtxGetCurrent", NULL, &dl1);
+        cu_ctx_push_fn_t    cu_push    = (cu_ctx_push_fn_t)lookup_cuda_sym("cuCtxPushCurrent_v2", "cuCtxPushCurrent", &dl2);
+        cu_ctx_pop_fn_t     cu_pop     = (cu_ctx_pop_fn_t)lookup_cuda_sym("cuCtxPopCurrent_v2", "cuCtxPopCurrent", &dl3);
+        cu_stream_sync_fn_t cu_sync    = (cu_stream_sync_fn_t)lookup_cuda_sym("cuStreamSynchronize", NULL, &dl4);
+        cu_memcpy_dtoh_fn_t cu_dtoh    = (cu_memcpy_dtoh_fn_t)lookup_cuda_sym("cuMemcpyDtoH_v2", "cuMemcpyDtoH", &dl5);
+        cu_memcpy_2d_fn_t   cu_m2d     = (cu_memcpy_2d_fn_t)lookup_cuda_sym("cuMemcpy2D_v2", "cuMemcpy2D", &dl6);
+
+        void *cur_ctx = NULL;
+        int pushed_ctx = 0;
+        if (s->device_type == NV_ENC_DEVICE_TYPE_CUDA && s->device_ptr && cu_get_ctx && cu_push) {
+            if (cu_get_ctx(&cur_ctx) == 0 && cur_ctx == NULL) {
+                if (cu_push(s->device_ptr) == 0) {
+                    pushed_ctx = 1;
                 }
-                dlclose(cu_dl);
             }
         }
-        if (cu_dtoh) {
-            int cu_st = cu_dtoh(rr->mapped_buf.data,
-                                (uint64_t)(uintptr_t)rr->reg.resourceToRegister,
-                                rr->cuda_host_size);
-            if (cu_st != 0) {
+        if (s->in_cuda_stream && cu_sync) {
+            (void)cu_sync(s->in_cuda_stream);
+        }
+
+        NVENCSTATUS map_st = NV_ENC_SUCCESS;
+        if (rr->is_cuda_devptr) {
+            if (cu_dtoh) {
+                int cu_st = cu_dtoh(rr->mapped_buf.data,
+                                    (uint64_t)(uintptr_t)rr->reg.resourceToRegister,
+                                    rr->cuda_host_size);
+                if (cu_st != 0) {
+                    snprintf(s->last_error, sizeof(s->last_error),
+                             "cuMemcpyDtoH_v2 failed (CUresult=%d)", cu_st);
+                    map_st = NV_ENC_ERR_GENERIC;
+                }
+            } else if (s->hw) {
                 snprintf(s->last_error, sizeof(s->last_error),
-                         "cuMemcpyDtoH_v2 failed (CUresult=%d)", cu_st);
-                return NV_ENC_ERR_GENERIC;
+                         "cuMemcpyDtoH_v2 not available for CUDADEVICEPTR readback");
+                map_st = NV_ENC_ERR_GENERIC;
             }
-        } else if (s->hw) {
-            snprintf(s->last_error, sizeof(s->last_error),
-                     "cuMemcpyDtoH_v2 not available for CUDADEVICEPTR readback");
-            return NV_ENC_ERR_GENERIC;
+        } else if (rr->is_cuda_array) {
+            if (cu_m2d) {
+                open_cu_memcpy2d_t cp;
+                memset(&cp, 0, sizeof(cp));
+                cp.srcMemoryType = 3; /* CU_MEMORYTYPE_ARRAY */
+                cp.srcArray      = rr->reg.resourceToRegister;
+                cp.dstMemoryType = 1; /* CU_MEMORYTYPE_HOST */
+                cp.dstHost       = rr->mapped_buf.data;
+                cp.dstPitch      = rr->mapped_buf.pitch;
+                cp.WidthInBytes  = compute_input_pitch(rr->mapped_buf.width, rr->mapped_buf.fmt);
+                cp.Height        = rr->mapped_buf.pitch
+                                       ? (rr->cuda_host_size / rr->mapped_buf.pitch)
+                                       : rr->mapped_buf.height;
+                int cu_st = cu_m2d(&cp);
+                if (cu_st != 0) {
+                    snprintf(s->last_error, sizeof(s->last_error),
+                             "cuMemcpy2D_v2 CUDAARRAY failed (CUresult=%d)", cu_st);
+                    map_st = NV_ENC_ERR_GENERIC;
+                }
+            } else if (s->hw) {
+                snprintf(s->last_error, sizeof(s->last_error),
+                         "cuMemcpy2D_v2 not available for CUDAARRAY readback");
+                map_st = NV_ENC_ERR_GENERIC;
+            }
+        }
+
+        if (pushed_ctx && cu_pop) {
+            void *dummy = NULL;
+            (void)cu_pop(&dummy);
+        }
+        if (dl1) { dlclose(dl1); }
+        if (dl2) { dlclose(dl2); }
+        if (dl3) { dlclose(dl3); }
+        if (dl4) { dlclose(dl4); }
+        if (dl5) { dlclose(dl5); }
+        if (dl6) { dlclose(dl6); }
+        if (map_st != NV_ENC_SUCCESS) {
+            return map_st;
         }
     }
     params->mappedResource  = &rr->mapped_buf;
@@ -1304,12 +1489,7 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
             open_nvenc_hw_destroy(s->hw, &s->rm);
             s->hw = NULL;
             open_nvenc_hw_init_cfg_t hw_cfg;
-            memset(&hw_cfg, 0, sizeof(hw_cfg));
-            hw_cfg.width      = s->init_params.encodeWidth;
-            hw_cfg.height     = s->init_params.encodeHeight;
-            hw_cfg.gop_length = s->config.gopLength;
-            resolve_hevc_geometry(s, &hw_cfg.chroma_format_idc, &hw_cfg.bit_depth,
-                                  &hw_cfg.qp, &hw_cfg.qp_p);
+            fill_hw_cfg_from_session(s, &hw_cfg);
             if (open_nvenc_hw_create(&s->hw, s->ctl_fd, s->dev_fd, &hw_cfg, &s->rm,
                                      s->last_error, sizeof(s->last_error)) < 0) {
                 trace_nvenc_event("nvEncReconfigureEncoder", NV_ENC_ERR_GENERIC, s->last_error);
@@ -1319,6 +1499,12 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
             uint32_t chroma = 1U, depth = 8U, qp = 24U, qp_p = 24U;
             resolve_hevc_geometry(s, &chroma, &depth, &qp, &qp_p);
             open_nvenc_hw_update_cfg(s->hw, s->config.gopLength, qp, qp_p,
+                                     s->config.rcParams.rateControlMode,
+                                     s->config.rcParams.averageBitRate,
+                                     s->config.rcParams.maxBitRate,
+                                     s->config.rcParams.vbvBufferSize,
+                                     s->init_params.frameRateNum,
+                                     s->init_params.frameRateDen,
                                      params->forceIDR ? 1 : 0);
         }
     }
@@ -1358,9 +1544,13 @@ static const char *impl_nvEncGetLastErrorString(void *encoder)
 static NVENCSTATUS impl_nvEncSetIOCudaStreams(
     void *encoder, NV_ENC_CUSTREAM_PTR inputStream, NV_ENC_CUSTREAM_PTR outputStream)
 {
-    (void)inputStream;
-    (void)outputStream;
-    return as_session(encoder) ? NV_ENC_SUCCESS : NV_ENC_ERR_INVALID_PTR;
+    open_nvenc_session_t *s = as_session(encoder);
+    if (!s) {
+        return NV_ENC_ERR_INVALID_PTR;
+    }
+    s->in_cuda_stream  = inputStream;
+    s->out_cuda_stream = outputStream;
+    return NV_ENC_SUCCESS;
 }
 
 static NVENCSTATUS impl_nvEncRestoreEncoderState(void *encoder, void *restoreStateParams)

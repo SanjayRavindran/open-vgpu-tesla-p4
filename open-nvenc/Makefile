@@ -6,8 +6,8 @@ LIB_TARGET  := libopen-nvidia-encode.so
 SONAME_LINK := libnvidia-encode.so.1
 UNIT_BIN    := test_nvenc_unit
 HW_BIN      := test_nvenc_hw
-SRCS        := open_nvenc.c open_nvenc_hw.c open_nvenc_hevc_hdr.c
-HDRS        := open_nvenc.h open_nvenc_hw.h open_nvenc_hevc_hdr.h
+SRCS        := open_nvenc.c open_nvenc_hw.c open_nvenc_hevc_hdr.c open_nvenc_h264_hdr.c
+HDRS        := open_nvenc.h open_nvenc_hw.h open_nvenc_hevc_hdr.h open_nvenc_h264_hdr.h
 
 .PHONY: all test diff-test hw-test clean
 

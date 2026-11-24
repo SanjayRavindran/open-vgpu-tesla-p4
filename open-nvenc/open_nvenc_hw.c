@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #include "open_nvenc_hw.h"
 #include "open_nvenc_hevc_hdr.h"
+#include "open_nvenc_h264_hdr.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -39,6 +40,7 @@
 #define NVA06F_CTRL_CMD_GPFIFO_SCHEDULE 0xa06f0103U
 #define NVA06F_CTRL_CMD_BIND            0xa06f0104U
 #define NV906F_CTRL_CMD_GET_CLASS_ENGINEID 0x906f0101U
+#define NVC0B5_ENGINE_TYPE_COPY0        0x12U
 #define NVC2B7_ENGINE_TYPE_NVENC0       0x1bU
 
 typedef struct {
@@ -244,6 +246,16 @@ struct _open_nvenc_hw_ctx {
     hw_buf_t input_buf;      /* block-linear input surface */
     hw_buf_t recon_buf[2];   /* double-buffered vidmem recon surfaces */
     hw_buf_t coloc_mv_buf[2];/* double-buffered vidmem colocated MV buffers */
+    hw_buf_t h264_mv_buf;    /* 0x20000 B vidmem for H.264 (0x0728/0x072c) */
+
+    uint32_t h_ce_channel;
+    uint32_t h_ce_obj;
+    int      ce_mapped;
+    int      ce_userd_fd;
+    void    *ce_userd_cpu;
+    uint32_t ce_gp_put;
+    uint32_t ce_pb_dw_cur;
+    int      has_ce;
 
     uint32_t pb_dw_cur;    /* current dword offset in pb_buf */
     uint32_t gp_put;
@@ -255,6 +267,9 @@ struct _open_nvenc_hw_ctx {
     uint32_t ctu_w;
     uint32_t ctu_h;
     uint32_t n_ctus;
+    uint32_t mb_w;
+    uint32_t mb_h;
+    uint32_t n_mbs;
     uint32_t uv_aligned_h;
     uint32_t surface_pitch;
     size_t   surface_size;
@@ -264,6 +279,11 @@ struct _open_nvenc_hw_ctx {
     uint32_t last_recon_slot;
     int      has_ref;
     int      force_next_idr;
+
+    double   rc_vbv_level;
+    double   rc_bits_per_frame;
+    double   rc_vbv_size;
+    uint32_t rc_cur_qp;
 };
 
 static uint32_t next_handle(open_nvenc_hw_ctx_t *ctx)
@@ -703,31 +723,127 @@ static void init_qm_rc_buf(uint32_t *qm)
     qm[0x54U / 4U] = 0x0000001aU;
 }
 
+static void rc_init_state(open_nvenc_hw_ctx_t *ctx)
+{
+    uint32_t min_qp = (ctx->cfg.min_qp > 0U && ctx->cfg.min_qp <= 51U) ? ctx->cfg.min_qp : 10U;
+    uint32_t max_qp = (ctx->cfg.max_qp > min_qp && ctx->cfg.max_qp <= 51U) ? ctx->cfg.max_qp : 46U;
+    double fps = (ctx->cfg.fps_num > 0U && ctx->cfg.fps_den > 0U)
+                     ? ((double)ctx->cfg.fps_num / (double)ctx->cfg.fps_den)
+                     : 30.0;
+    if (fps < 1.0) {
+        fps = 30.0;
+    }
+
+    uint32_t target_bps = ctx->cfg.average_bitrate ? ctx->cfg.average_bitrate : ctx->cfg.max_bitrate;
+    if (ctx->cfg.rc_mode != 0U && target_bps > 0U) {
+        ctx->rc_bits_per_frame = (double)target_bps / fps;
+        ctx->rc_vbv_size = (ctx->cfg.vbv_buffer_size > 0U)
+                               ? (double)ctx->cfg.vbv_buffer_size
+                               : (double)target_bps;
+        if (ctx->rc_vbv_size < ctx->rc_bits_per_frame * 4.0) {
+            ctx->rc_vbv_size = ctx->rc_bits_per_frame * 4.0;
+        }
+        ctx->rc_vbv_level = ctx->rc_vbv_size * 0.25;
+
+        double pixels = (double)ctx->cfg.width * (double)ctx->cfg.height;
+        double bpp = (pixels > 0.0) ? (ctx->rc_bits_per_frame / pixels) : 0.1;
+        uint32_t init_qp = 22U;
+        if (bpp >= 0.30) {
+            init_qp = 18U;
+        } else if (bpp >= 0.12) {
+            init_qp = 22U;
+        } else if (bpp >= 0.05) {
+            init_qp = 26U;
+        } else {
+            init_qp = 30U;
+        }
+        if (init_qp < min_qp) {
+            init_qp = min_qp;
+        }
+        if (init_qp > max_qp) {
+            init_qp = max_qp;
+        }
+        ctx->rc_cur_qp = init_qp;
+    } else {
+        ctx->rc_bits_per_frame = 0.0;
+        ctx->rc_vbv_size       = 0.0;
+        ctx->rc_vbv_level      = 0.0;
+        ctx->rc_cur_qp         = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
+    }
+}
+
+static uint32_t rc_select_frame_qp(const open_nvenc_hw_ctx_t *ctx, int is_idr)
+{
+    if (ctx->cfg.rc_mode != 0U && ctx->rc_bits_per_frame > 0.0) {
+        uint32_t min_qp = (ctx->cfg.min_qp > 0U && ctx->cfg.min_qp <= 51U) ? ctx->cfg.min_qp : 10U;
+        uint32_t qp     = ctx->rc_cur_qp;
+        if (is_idr && qp > min_qp + 2U) {
+            qp -= 2U;
+        }
+        return qp;
+    }
+    uint32_t qp_i = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
+    uint32_t qp_p = (ctx->cfg.qp_p > 0U && ctx->cfg.qp_p <= 51U) ? ctx->cfg.qp_p : qp_i;
+    return is_idr ? qp_i : qp_p;
+}
+
+static void rc_update_after_frame(open_nvenc_hw_ctx_t *ctx, uint32_t encoded_bits, int is_idr)
+{
+    if (ctx->cfg.rc_mode == 0U || ctx->rc_bits_per_frame <= 0.0) {
+        return;
+    }
+    uint32_t min_qp = (ctx->cfg.min_qp > 0U && ctx->cfg.min_qp <= 51U) ? ctx->cfg.min_qp : 10U;
+    uint32_t max_qp = (ctx->cfg.max_qp > min_qp && ctx->cfg.max_qp <= 51U) ? ctx->cfg.max_qp : 46U;
+
+    ctx->rc_vbv_level += (double)encoded_bits - ctx->rc_bits_per_frame;
+    if (ctx->rc_vbv_level < 0.0) {
+        ctx->rc_vbv_level = 0.0;
+    }
+
+    if (is_idr) {
+        return;
+    }
+
+    double fullness = ctx->rc_vbv_level / ctx->rc_vbv_size;
+    int32_t delta = 0;
+    if ((double)encoded_bits > ctx->rc_bits_per_frame * 1.40 || fullness > 0.65) {
+        delta = ((double)encoded_bits > ctx->rc_bits_per_frame * 2.2) ? 2 : 1;
+    } else if ((double)encoded_bits < ctx->rc_bits_per_frame * 0.68 && fullness < 0.35) {
+        delta = ((double)encoded_bits < ctx->rc_bits_per_frame * 0.35) ? -2 : -1;
+    }
+
+    int32_t next_qp = (int32_t)ctx->rc_cur_qp + delta;
+    if (next_qp < (int32_t)min_qp) {
+        next_qp = (int32_t)min_qp;
+    }
+    if (next_qp > (int32_t)max_qp) {
+        next_qp = (int32_t)max_qp;
+    }
+    ctx->rc_cur_qp = (uint32_t)next_qp;
+}
+
 static void build_pic_setup(const open_nvenc_hw_ctx_t *ctx,
                             uint8_t *buf,
                             int is_idr,
                             uint32_t ref_dpb_slot,
-                            uint32_t cur_dpb_slot)
+                            uint32_t cur_dpb_slot,
+                            uint32_t qp)
 {
     memset(buf, 0, 0xe000U);
     uint32_t *w = (uint32_t *)buf;
     (void)cur_dpb_slot;
 
-    uint32_t width     = ctx->cfg.width;
     uint32_t aligned_h = ctx->aligned_h;
     uint32_t aligned_w = ctx->aligned_w;
     int      is_444    = (ctx->cfg.chroma_format_idc == 3U);
     int      is_10b    = (ctx->cfg.bit_depth == 10U);
-    uint32_t qp_i      = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
-    uint32_t qp_p      = (ctx->cfg.qp_p > 0U && ctx->cfg.qp_p <= 51U) ? ctx->cfg.qp_p : qp_i;
-    uint32_t qp        = is_idr ? qp_i : qp_p;
     uint32_t gop_len   = (ctx->cfg.gop_length > 0U) ? ctx->cfg.gop_length : 0xfaU;
 
     uint32_t y_stride_bytes = aligned_w * (is_10b ? 2U : 1U);
     uint32_t y_plane_pages  = (y_stride_bytes * aligned_h) >> 8; /* in 256B units */
     uint32_t uv_plane_pages = (y_stride_bytes * ctx->uv_aligned_h) >> 8;
     uint32_t uv_stride_hdr  = is_444 ? (aligned_w * 2U) : aligned_w;
-    uint32_t dims_m1        = ((aligned_h - 1U) << 16) | (width - 1U);
+    uint32_t dims_m1        = ((aligned_h - 1U) << 16) | (aligned_w - 1U);
     uint32_t stride_word    = (uv_stride_hdr << 16) | aligned_w;
     uint32_t fmt_slot_word  = is_444 ? 0x00000302U : 0x00000002U;
 
@@ -819,9 +935,11 @@ static void build_pic_setup(const open_nvenc_hw_ctx_t *ctx,
     w[0x002b4U / 4U] = 0x00010000U;
     w[0x002e4U / 4U] = ((aligned_h >> 4) + 1U) << 8;
     w[0x002e8U / 4U] = 0x00000100U;
-    w[0x0030cU / 4U] = (ctx->n_ctus > 1024U)
+    w[0x0030cU / 4U] = (ctx->n_ctus > 1900U)
                            ? 0x16698000U
-                           : ((ctx->n_ctus > 256U) ? 0x0a1b8000U : 0x09e34000U);
+                           : ((ctx->n_ctus > 1024U)
+                                  ? 0x13128000U
+                                  : ((ctx->n_ctus > 256U) ? 0x0a1b8000U : 0x09e34000U));
 
     /* Motion/search/CU cost parameters (+0x800 block) */
     w[0x00800U / 4U] = 0x00074002U;
@@ -857,6 +975,293 @@ static void build_pic_setup(const open_nvenc_hw_ctx_t *ctx,
     w[0x05904U / 4U] = is_idr ? 0x18000204U : 0x18000200U;
 }
 
+static void build_pic_setup_h264(const open_nvenc_hw_ctx_t *ctx,
+                                 uint8_t *buf,
+                                 int is_idr,
+                                 uint32_t ref_dpb_slot,
+                                 uint32_t cur_dpb_slot,
+                                 uint32_t qp)
+{
+    memset(buf, 0, 0xe000U);
+    uint32_t *w = (uint32_t *)buf;
+    (void)cur_dpb_slot;
+
+    uint32_t width     = ctx->cfg.width;
+    uint32_t aligned_w = ctx->aligned_w;
+    uint32_t aligned_h = ctx->aligned_h;
+    uint32_t h16       = ctx->mb_h << 4;
+    int      is_444    = (ctx->cfg.chroma_format_idc == 3U);
+    uint32_t gop_len   = (ctx->cfg.gop_length > 0U) ? ctx->cfg.gop_length : 0xfaU;
+    uint8_t  level_idc = open_nvenc_h264_compute_level_idc(width, ctx->cfg.height);
+
+    uint32_t y_plane_pages  = (aligned_w * aligned_h) >> 8;
+    uint32_t uv_plane_pages = (aligned_w * ctx->uv_aligned_h) >> 8;
+    uint32_t uv_stride_hdr  = is_444 ? (aligned_w * 2U) : aligned_w;
+    uint32_t dims_m1        = ((h16 - 1U) << 16) | (width - 1U);
+    uint32_t stride_word    = (uv_stride_hdr << 16) | aligned_w;
+    uint32_t fmt_slot_word  = is_444 ? 0x00000302U : 0x00000002U;
+
+    uint32_t slot_w14 = is_444 ? 0U : (y_plane_pages >> 1);
+    uint32_t slot_w18 = y_plane_pages;
+    uint32_t slot_w1c = is_444 ? (y_plane_pages * 2U) : (y_plane_pages + (uv_plane_pages >> 1));
+
+    w[0x0000U / 4U] = 0xc2b70006U;
+
+    /* Slot 0: Current Input, Slot 1: Recon Output, Slot 2: Ref/Scratch geometry */
+    for (uint32_t base = 0x0004U; base <= 0x0044U; base += 0x0020U) {
+        w[(base + 0x00U) / 4U] = dims_m1;
+        w[(base + 0x04U) / 4U] = stride_word;
+        w[(base + 0x10U) / 4U] = slot_w14;
+        w[(base + 0x14U) / 4U] = slot_w18;
+        w[(base + 0x18U) / 4U] = slot_w1c;
+        w[(base + 0x1cU) / 4U] = fmt_slot_word;
+    }
+
+    /* H.264 sequence/picture flags (verified vs vendor h264_nv12, h264_y444, h264_720p traces) */
+    w[0x0064U / 4U] = (is_444 ? 0x144300f4U : 0x1441004dU) | ((uint32_t)level_idc << 8);
+    w[0x0068U / 4U] = is_444 ? 0x30000000U : 0x00000100U;
+    w[0x006cU / 4U] = is_444 ? 0x000000c6U : 0x00000040U;
+    w[0x0070U / 4U] = 0x131f0002U | ((qp & 0x3fU) << 8);
+    w[0x0074U / 4U] = 0x33000000U;
+    w[0x0078U / 4U] = 0x03063333U;
+    w[0x007cU / 4U] = 0x00000100U;
+    w[0x0080U / 4U] = 0x00000100U;
+    w[0x0084U / 4U] = 0x00000100U;
+    w[0x0088U / 4U] = 0x00001e00U;
+    w[0x008cU / 4U] = 0x003d0900U;
+    w[0x0090U / 4U] = 0x003d0900U;
+    w[0x0094U / 4U] = 0x001e8480U;
+    w[0x0098U / 4U] = 0x003d0900U;
+    w[0x009cU / 4U] = 0x001e8480U;
+    w[0x00a0U / 4U] = gop_len;
+    w[0x00a4U / 4U] = 0x00000007U;
+    w[0x00a8U / 4U] = (width > 512U) ? 0x0000006fU : 0x0000061aU;
+    w[0x00acU / 4U] = (width > 512U) ? 0x00000012U : 0x00000104U;
+    w[0x00b0U / 4U] = (width > 512U) ? 0x00000012U : 0x00000104U;
+    w[0x00b8U / 4U] = 0x00010000U;
+    w[0x00bcU / 4U] = 0x00010100U;
+
+    if (is_idr) {
+        w[0x00c8U / 4U] = 0xfefefefeU;
+        w[0x00ccU / 4U] = 0xfefefefeU;
+        w[0x00d0U / 4U] = 0xfefefefeU;
+        w[0x00d4U / 4U] = 0xfefefefeU;
+    } else {
+        w[0x00c8U / 4U] = 0xfefefe00U | ((ref_dpb_slot & 0xfU) << 1);
+        w[0x00ccU / 4U] = 0xfefefefeU;
+        w[0x00d0U / 4U] = 0xfefefefeU;
+        w[0x00d4U / 4U] = 0xfefefefeU;
+        w[0x00d8U / 4U] = 0xffffff03U;
+        for (uint32_t off = 0x00dcU; off <= 0x0164U; off += 4U) {
+            int is_hdr = (((off - 0x00d8U) % 0x10U) == 0U);
+            w[off / 4U] = is_hdr ? 0xffff0100U : 0xffffffffU;
+        }
+        w[0x0168U / 4U] = 0xfefefefeU;
+        w[0x016cU / 4U] = 0xfefefefeU;
+        w[0x017cU / 4U] = 0x00060000U | (ctx->gop_poc & 0xffffU);
+    }
+
+    w[0x018cU / 4U] = 0x00000500U;
+    w[0x0190U / 4U] = 0x00000200U;
+    w[0x0194U / 4U] = 0x00000300U;
+    w[0x0198U / 4U] = 0x00000400U;
+    w[0x019cU / 4U] = ((ctx->ctu_w * (ctx->mb_h + 1U) * 3U) / 2U) << 8;
+    w[0x01a0U / 4U] = (uint32_t)ctx->bs_buf.size;
+    w[0x01a8U / 4U] = is_idr ? 0x0000005cU : 0x00000050U;
+    w[0x01b4U / 4U] = 0x00000100U;
+    w[0x01b8U / 4U] = 0x00000100U;
+    w[0x01bcU / 4U] = 0x00002500U;
+    w[0x01d4U / 4U] = (width > 512U) ? 0x00000400U : 0x00000200U;
+    w[0x01d8U / 4U] = 0x00000100U;
+    w[0x01fcU / 4U] = (ctx->n_mbs > 3600U) ? 0x16698000U : ((ctx->n_mbs > 1024U) ? 0x0a1b8000U : 0x09e34000U);
+
+    /* Search & ME tables (+0x200 block) */
+    w[0x0200U / 4U] = 0x00074002U;
+    w[0x0204U / 4U] = (width > 512U) ? 0x0e004001U : 0x0f004001U;
+    w[0x0208U / 4U] = (width > 512U) ? 0x01ff1fffU : 0x00ff1fffU;
+    w[0x020cU / 4U] = is_idr ? 0x28080000U : 0x29282689U;
+    w[0x0214U / 4U] = 0xa0000000U;
+    if (is_idr) {
+        w[0x022cU / 4U] = 0x1c1c0000U;
+        w[0x0230U / 4U] = 0x0000001cU;
+    } else {
+        w[0x022cU / 4U] = 0x7f1c0800U;
+        w[0x0230U / 4U] = 0x0000081cU;
+        w[0x0238U / 4U] = 0x1c1c0000U;
+        w[0x023cU / 4U] = 0x0000001cU;
+        w[0x0244U / 4U] = 0x1c1c0000U;
+        w[0x0248U / 4U] = 0x0000001cU;
+    }
+
+    /* RDO / Deblock / Mode tables (+0x300 block) */
+    w[0x0304U / 4U] = is_444 ? 0x03ffffffU : 0x03fc01ffU;
+    w[0x0308U / 4U] = is_idr ? 0x0e0f0f0fU : 0x0800000fU;
+    w[0x030cU / 4U] = 0xffff0000U;
+    w[0x0310U / 4U] = is_idr ? 0xffffffffU : 0xfffeffffU;
+    w[0x0314U / 4U] = 0x00020000U;
+    w[0x0318U / 4U] = is_idr ? 0xfffe0000U : 0xfffeffffU;
+    w[0x031cU / 4U] = is_444 ? 0xfffefffeU : 0xffffffffU;
+    w[0x0324U / 4U] = 0x00030020U;
+    w[0x0328U / 4U] = 0x00000002U;
+    w[0x032cU / 4U] = 0x00130009U;
+    w[0x0330U / 4U] = 0xffff0000U;
+    w[0x0334U / 4U] = 0x3ceaffffU;
+    w[0x0338U / 4U] = 0x0000fff3U;
+
+    /* Quant/lambda tables (+0x400..+0x490) */
+    static const uint32_t h264_qtbl[] = {
+        0xaaff056bU, 0x000fffaaU, 0x02020302U, 0x00000000U,
+        0x036e03ffU, 0x02aa0334U, 0x0334036eU, 0x020002aaU,
+        0x02aa0334U, 0x019a0200U, 0x020002aaU, 0x019a019aU,
+        0x024a02aaU, 0x01c80222U, 0x0222024aU, 0x015601c8U,
+        0x01c80222U, 0x01240156U, 0x015601c8U, 0x01120124U,
+        0x015602aaU, 0x02aa02aaU, 0x02aa02aaU, 0x02aa02aaU,
+        0x02aa02aaU, 0x02aa02aaU, 0x02aa02aaU, 0x02aa02aaU,
+        0x02aa02aaU, 0x01560156U, 0x01560156U, 0x01560156U,
+        0x01560156U, 0x01560156U, 0x01560156U, 0x01560156U,
+        0x01560156U
+    };
+    for (size_t i = 0U; i < sizeof(h264_qtbl) / sizeof(h264_qtbl[0]); i++) {
+        w[(0x0400U / 4U) + i] = h264_qtbl[i];
+    }
+
+    /* Slice header template (+0x500 block) */
+    w[0x0500U / 4U] = (is_idr ? 0x00980000U : 0x00c00000U) | (ctx->n_mbs & 0xffffU);
+    w[0x0508U / 4U] = 0x00330000U;
+}
+
+static void ce_init_and_clear_vidmem(open_nvenc_hw_ctx_t *ctx,
+                                     hw_buf_t *const *bufs, size_t nbufs,
+                                     open_nvenc_rm_stats_t *rm_stats)
+{
+    if (!ctx || getenv("OPEN_NVENC_NO_CE")) {
+        return;
+    }
+    ctx->h_ce_channel = next_handle(ctx);
+    ctx->h_ce_obj     = next_handle(ctx);
+
+    nv_channel_alloc_params_t chp;
+    memset(&chp, 0, sizeof(chp));
+    chp.hObjectError  = ctx->h_ctx_dma;
+    chp.hObjectBuffer = ctx->h_vaspace;
+    chp.gpFifoOffset  = ctx->pb_buf.gpu_va + 0x24000ULL;
+    chp.gpFifoEntries = 0x800U;
+
+    uint32_t st = 0U;
+    if (rm_alloc64(ctx->ctl_fd, ctx->h_client, ctx->h_device, ctx->h_ce_channel,
+                   OPEN_NVENC_RM_CLASS_CHANNEL_GPFIFO, &chp, 0U, rm_stats, &st) < 0) {
+        ctx->h_ce_channel = 0U;
+        ctx->h_ce_obj     = 0U;
+        return;
+    }
+
+    uint32_t bind_eng     = NVC0B5_ENGINE_TYPE_COPY0;
+    uint16_t sched_enable = 1U;
+    if (rm_ctrl(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, NVA06F_CTRL_CMD_BIND,
+                &bind_eng, sizeof(bind_eng), rm_stats, &st) < 0 ||
+        rm_ctrl(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, NVA06F_CTRL_CMD_GPFIFO_SCHEDULE,
+                &sched_enable, sizeof(sched_enable), rm_stats, &st) < 0) {
+        ctx->has_ce = 0;
+        return;
+    }
+
+    ctx->ce_userd_fd = open(ctx->dev_path, O_RDWR | O_CLOEXEC);
+    if (ctx->ce_userd_fd < 0) {
+        ctx->has_ce = 0;
+        return;
+    }
+    nv_register_fd_t urfd;
+    urfd.ctl_fd = ctx->ctl_fd;
+    if (ioctl(ctx->ce_userd_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, nv_register_fd_t), &urfd) < 0) {
+        ctx->has_ce = 0;
+        return;
+    }
+    nv_nvos33_t umap;
+    memset(&umap, 0, sizeof(umap));
+    umap.hClient = ctx->h_client;
+    umap.hDevice = ctx->h_subdevice;
+    umap.hMemory = ctx->h_ce_channel;
+    umap.length  = 0x200ULL;
+    umap.flags   = 0x03000000U;
+    umap.fd      = ctx->ce_userd_fd;
+    umap.status  = 0xffffffffU;
+    if (ioctl(ctx->ctl_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_RM_MAP_MEMORY, nv_nvos33_t), &umap) < 0 ||
+        umap.status != 0U) {
+        ctx->has_ce = 0;
+        return;
+    }
+    ctx->ce_mapped    = 1;
+    ctx->ce_userd_cpu = mmap(NULL, 0x1000U, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->ce_userd_fd, 0);
+    if (ctx->ce_userd_cpu == MAP_FAILED) {
+        ctx->ce_userd_cpu = NULL;
+        ctx->has_ce = 0;
+        return;
+    }
+
+    if (rm_alloc64(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, ctx->h_ce_obj,
+                   OPEN_NVENC_RM_CLASS_COPY_ENGINE, NULL, 0U, rm_stats, &st) < 0) {
+        ctx->h_ce_obj = 0U;
+        ctx->has_ce   = 0;
+        return;
+    }
+
+    ctx->ce_pb_dw_cur = 0x1e000U / 4U;
+    volatile uint32_t *pb        = (volatile uint32_t *)ctx->pb_buf.cpu;
+    volatile uint32_t *ce_gpfifo = (volatile uint32_t *)((uint8_t *)ctx->pb_buf.cpu + 0x24000U);
+    uint32_t start_dw            = ctx->ce_pb_dw_cur;
+
+    pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0000U, 1U);
+    pb[ctx->ce_pb_dw_cur++] = OPEN_NVENC_RM_CLASS_COPY_ENGINE;
+
+    for (size_t i = 0U; i < nbufs; i++) {
+        const hw_buf_t *b = bufs[i];
+        if (!b || !b->h_mem || b->size == 0ULL) {
+            continue;
+        }
+        uint32_t sz = (uint32_t)b->size;
+        pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0410U, 4U);
+        pb[ctx->ce_pb_dw_cur++] = sz;
+        pb[ctx->ce_pb_dw_cur++] = sz;
+        pb[ctx->ce_pb_dw_cur++] = sz;
+        pb[ctx->ce_pb_dw_cur++] = 1U;
+        pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0700U, 1U);
+        pb[ctx->ce_pb_dw_cur++] = 0U;
+        pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0708U, 1U);
+        pb[ctx->ce_pb_dw_cur++] = 0x00006664U;
+        pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0400U, 4U);
+        pb[ctx->ce_pb_dw_cur++] = (uint32_t)(b->gpu_va >> 32);
+        pb[ctx->ce_pb_dw_cur++] = (uint32_t)(b->gpu_va & 0xffffffffU);
+        pb[ctx->ce_pb_dw_cur++] = (uint32_t)(b->gpu_va >> 32);
+        pb[ctx->ce_pb_dw_cur++] = (uint32_t)(b->gpu_va & 0xffffffffU);
+        pb[ctx->ce_pb_dw_cur++] = pb_hdr_inc(4U, 0x0300U, 1U);
+        pb[ctx->ce_pb_dw_cur++] = 0x00000586U;
+    }
+
+    uint32_t ce_token            = 0xce000001U;
+    volatile uint32_t *ce_sema   = (volatile uint32_t *)((uint8_t *)ctx->sema_buf.cpu + 0x2000U);
+    *ce_sema                     = 0U;
+    uint64_t ce_sema_va          = ctx->sema_buf.gpu_va + 0x2000ULL;
+    pb[ctx->ce_pb_dw_cur++]      = pb_hdr_inc(0U, 0x0010U, 4U);
+    pb[ctx->ce_pb_dw_cur++]      = (uint32_t)(ce_sema_va >> 32);
+    pb[ctx->ce_pb_dw_cur++]      = (uint32_t)(ce_sema_va & 0xffffffffU);
+    pb[ctx->ce_pb_dw_cur++]      = ce_token;
+    pb[ctx->ce_pb_dw_cur++]      = 0x01100002U;
+
+    uint32_t dw_cnt = ctx->ce_pb_dw_cur - start_dw;
+    uint64_t pb_va  = ctx->pb_buf.gpu_va + ((uint64_t)start_dw * 4ULL);
+    uint32_t idx    = ctx->ce_gp_put % 0x800U;
+    ce_gpfifo[idx * 2U + 0U] = (uint32_t)(pb_va & 0xfffffffcU);
+    ce_gpfifo[idx * 2U + 1U] = (uint32_t)((pb_va >> 32) & 0xffU) | ((dw_cnt & 0x1fffffU) << 10);
+    __sync_synchronize();
+    ctx->ce_gp_put = (ctx->ce_gp_put + 1U) % 0x800U;
+    ((volatile uint32_t *)ctx->ce_userd_cpu)[0x8cU / 4U] = ctx->ce_gp_put;
+    __sync_synchronize();
+
+    if (wait_sema_equal(ce_sema, ce_token, 200) == 0) {
+        ctx->has_ce = 1;
+    }
+}
+
 int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
                          int ctl_fd, int dev_fd,
                          const open_nvenc_hw_init_cfg_t *cfg,
@@ -872,11 +1277,12 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     if (!ctx) {
         return -ENOMEM;
     }
-    ctx->ctl_fd   = ctl_fd;
-    ctx->dev_fd   = dev_fd;
-    ctx->userd_fd = -1;
-    ctx->cfg      = *cfg;
-    ctx->h_next   = 0x80000000U;
+    ctx->ctl_fd      = ctl_fd;
+    ctx->dev_fd      = dev_fd;
+    ctx->userd_fd    = -1;
+    ctx->ce_userd_fd = -1;
+    ctx->cfg         = *cfg;
+    ctx->h_next      = 0x80000000U;
 
     const char *cpath = getenv("OPEN_NVENC_NVIDIACTL_PATH");
     const char *dpath = getenv("OPEN_NVENC_NVIDIA0_PATH");
@@ -1064,6 +1470,9 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     ctx->ctu_w        = ctx->aligned_w >> 5;
     ctx->ctu_h        = ctx->aligned_h >> 5;
     ctx->n_ctus       = ctx->ctu_w * ctx->ctu_h;
+    ctx->mb_w         = (cfg->width + 15U) >> 4;
+    ctx->mb_h         = (cfg->height + 15U) >> 4;
+    ctx->n_mbs        = ctx->mb_w * ctx->mb_h;
     int is_444_fmt    = (cfg->chroma_format_idc == 3U);
     ctx->uv_aligned_h = is_444_fmt ? ctx->aligned_h : (((ctx->aligned_h >> 1) + 31U) & ~31U);
 
@@ -1083,9 +1492,12 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     }
     bs_size = (bs_size + 0xfffU) & ~(size_t)0xfffU;
 
-    size_t scratch_size = (size_t)ctx->n_ctus * 1024U;
-    if (scratch_size < 0x10000U) {
-        scratch_size = 0x10000U;
+    size_t scratch_size = cfg->is_h264
+                              ? ((size_t)ctx->n_mbs * 384U)
+                              : ((size_t)ctx->n_ctus * 1024U);
+    size_t min_scratch  = cfg->is_h264 ? 0x20000U : 0x10000U;
+    if (scratch_size < min_scratch) {
+        scratch_size = min_scratch;
     }
     scratch_size = (scratch_size + 0xffffU) & ~(size_t)0xffffU;
 
@@ -1114,8 +1526,30 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
         alloc_buf_vidmem(ctx, &ctx->coloc_mv_buf[1], coloc_size, rm_stats, err_buf, err_cap) < 0) {
         goto fail;
     }
+    if (cfg->is_h264) {
+        size_t h264_mv_sz = (size_t)ctx->n_mbs * 512U;
+        if (h264_mv_sz < 0x50000U) {
+            h264_mv_sz = 0x50000U;
+        }
+        h264_mv_sz = (h264_mv_sz + 0xffffU) & ~(size_t)0xffffU;
+        if (alloc_buf_vidmem(ctx, &ctx->h264_mv_buf, h264_mv_sz, rm_stats, err_buf, err_cap) < 0) {
+            goto fail;
+        }
+    }
 
     init_qm_rc_buf((uint32_t *)ctx->qm_rc_buf.cpu);
+    rc_init_state(ctx);
+
+    /* Optional NVC0B5 Copy Engine vidmem zero-clear (skips gracefully if unavailable) */
+    {
+        hw_buf_t *const ce_clear_list[] = {
+            &ctx->scratch_buf, &ctx->recon_buf[0], &ctx->recon_buf[1],
+            &ctx->coloc_mv_buf[0], &ctx->coloc_mv_buf[1],
+            cfg->is_h264 ? &ctx->h264_mv_buf : NULL
+        };
+        ce_init_and_clear_vidmem(ctx, ce_clear_list,
+                                 sizeof(ce_clear_list) / sizeof(ce_clear_list[0]), rm_stats);
+    }
 
     /* 5. Submit SET_OBJECT = 0xc2b7 & init ctx (0x0204 = 0x5ffffffe) + verify GPGet advances */
     volatile uint32_t *pb = (volatile uint32_t *)ctx->pb_buf.cpu;
@@ -1157,6 +1591,33 @@ void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx, open_nvenc_rm_stats_t *rm_s
     if (!ctx) {
         return;
     }
+    if (ctx->h_ce_obj && ctx->h_ce_channel) {
+        (void)rm_free(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, ctx->h_ce_obj, rm_stats);
+        ctx->h_ce_obj = 0U;
+    }
+    if (ctx->ce_userd_cpu && ctx->ce_userd_cpu != MAP_FAILED) {
+        munmap(ctx->ce_userd_cpu, 0x1000U);
+        ctx->ce_userd_cpu = NULL;
+    }
+    if (ctx->ce_userd_fd >= 0) {
+        if (ctx->ce_mapped) {
+            nv_nvos33_t ureq;
+            memset(&ureq, 0, sizeof(ureq));
+            ureq.hClient = ctx->h_client;
+            ureq.hDevice = ctx->h_subdevice;
+            ureq.hMemory = ctx->h_ce_channel;
+            (void)ioctl(ctx->ctl_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_RM_UNMAP_MEMORY, nv_nvos33_t), &ureq);
+            ctx->ce_mapped = 0;
+        }
+        close(ctx->ce_userd_fd);
+        ctx->ce_userd_fd = -1;
+    }
+    if (ctx->h_ce_channel) {
+        (void)rm_free(ctx->ctl_fd, ctx->h_client, ctx->h_device, ctx->h_ce_channel, rm_stats);
+        ctx->h_ce_channel = 0U;
+    }
+
+    free_hw_buf(ctx, &ctx->h264_mv_buf, ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->coloc_mv_buf[1], ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->coloc_mv_buf[0], ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->recon_buf[1], ctx->h_vaspace, rm_stats);
@@ -1242,9 +1703,15 @@ static inline size_t gob_bl_offset(uint32_t x_byte, uint32_t y, uint32_t pitch_b
     return (size_t)gob_idx * 512U + (size_t)in_gob;
 }
 
+static inline uint8_t clamp_u8(int v)
+{
+    return (uint8_t)((v < 0) ? 0 : ((v > 255) ? 255 : v));
+}
+
 static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                                 const uint8_t *src, uint32_t src_pitch,
-                                NV_ENC_BUFFER_FORMAT fmt)
+                                NV_ENC_BUFFER_FORMAT fmt,
+                                const uint32_t chroma_offset[2])
 {
     uint8_t *dst       = (uint8_t *)ctx->input_buf.cpu;
     uint32_t w         = ctx->cfg.width;
@@ -1261,6 +1728,91 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
     }
 
     memset(dst, 0, ctx->surface_size);
+
+    if (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ABGR) {
+        uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
+        size_t   uv_avail = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
+        uint32_t uv_pitch = is_444 ? (dst_pitch * 2U) : dst_pitch;
+        int      is_argb  = (fmt == NV_ENC_BUFFER_FORMAT_ARGB);
+
+        for (uint32_t y = 0U; y < ah; y++) {
+            uint32_t sy = (y < h) ? y : (h - 1U);
+            const uint8_t *srow = src + (size_t)sy * src_pitch;
+            for (uint32_t x = 0U; x < w; x++) {
+                const uint8_t *px = srow + (size_t)x * 4U;
+                int r = is_argb ? px[2] : px[0];
+                int g = px[1];
+                int b = is_argb ? px[0] : px[2];
+                int yy = ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+                int uu = ((-26 * r - 86 * g + 112 * b + 128) >> 8) + 128;
+                int vv = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
+                uint8_t y8 = clamp_u8(yy);
+                uint8_t u8 = clamp_u8(uu);
+                uint8_t v8 = clamp_u8(vv);
+
+                if (is_10b) {
+                    uint16_t y10 = (uint16_t)y8 << 8;
+                    size_t off = gob_bl_offset(x * 2U, y, dst_pitch);
+                    if (off + 1U < ctx->surface_size) {
+                        dst[off]      = (uint8_t)(y10 & 0xffU);
+                        dst[off + 1U] = (uint8_t)(y10 >> 8);
+                    }
+                    if (is_444) {
+                        uint16_t u10 = (uint16_t)u8 << 8;
+                        uint16_t v10 = (uint16_t)v8 << 8;
+                        size_t off_u = gob_bl_offset(x * 4U, y, uv_pitch);
+                        size_t off_v = gob_bl_offset(x * 4U + 2U, y, uv_pitch);
+                        if (off_u + 1U < uv_avail) {
+                            dst_uv[off_u]      = (uint8_t)(u10 & 0xffU);
+                            dst_uv[off_u + 1U] = (uint8_t)(u10 >> 8);
+                        }
+                        if (off_v + 1U < uv_avail) {
+                            dst_uv[off_v]      = (uint8_t)(v10 & 0xffU);
+                            dst_uv[off_v + 1U] = (uint8_t)(v10 >> 8);
+                        }
+                    } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
+                        uint16_t u10 = (uint16_t)u8 << 8;
+                        uint16_t v10 = (uint16_t)v8 << 8;
+                        size_t off_u = gob_bl_offset(x * 2U, y >> 1, uv_pitch);
+                        size_t off_v = gob_bl_offset(x * 2U + 2U, y >> 1, uv_pitch);
+                        if (off_u + 1U < uv_avail) {
+                            dst_uv[off_u]      = (uint8_t)(u10 & 0xffU);
+                            dst_uv[off_u + 1U] = (uint8_t)(u10 >> 8);
+                        }
+                        if (off_v + 1U < uv_avail) {
+                            dst_uv[off_v]      = (uint8_t)(v10 & 0xffU);
+                            dst_uv[off_v + 1U] = (uint8_t)(v10 >> 8);
+                        }
+                    }
+                } else {
+                    size_t off = gob_bl_offset(x, y, dst_pitch);
+                    if (off < ctx->surface_size) {
+                        dst[off] = y8;
+                    }
+                    if (is_444) {
+                        size_t off_u = gob_bl_offset(x * 2U, y, uv_pitch);
+                        size_t off_v = gob_bl_offset(x * 2U + 1U, y, uv_pitch);
+                        if (off_u < uv_avail) {
+                            dst_uv[off_u] = u8;
+                        }
+                        if (off_v < uv_avail) {
+                            dst_uv[off_v] = v8;
+                        }
+                    } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
+                        size_t off_u = gob_bl_offset(x, y >> 1, uv_pitch);
+                        size_t off_v = gob_bl_offset(x + 1U, y >> 1, uv_pitch);
+                        if (off_u < uv_avail) {
+                            dst_uv[off_u] = u8;
+                        }
+                        if (off_v < uv_avail) {
+                            dst_uv[off_v] = v8;
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
 
     /* Plane 0 (Luma Y in Pascal 16Bx2 block-linear) */
     uint32_t copy_y_bytes = (row_bytes <= src_pitch && row_bytes <= dst_pitch) ? row_bytes : dst_pitch;
@@ -1280,8 +1832,12 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
         uint8_t *dst_uv    = dst + (size_t)dst_pitch * (size_t)ah;
         size_t   uv_avail  = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
         uint32_t uv_pitch  = dst_pitch * 2U;
-        const uint8_t *src_u = src + (size_t)src_pitch * (size_t)h;
-        const uint8_t *src_v = src_u + (size_t)src_pitch * (size_t)h;
+        const uint8_t *src_u = (chroma_offset && chroma_offset[0] > 0U)
+                                   ? (src + chroma_offset[0])
+                                   : (src + (size_t)src_pitch * (size_t)h);
+        const uint8_t *src_v = (chroma_offset && chroma_offset[1] > 0U)
+                                   ? (src + chroma_offset[1])
+                                   : (src_u + (size_t)src_pitch * (size_t)h);
         for (uint32_t y = 0U; y < ah; y++) {
             uint32_t sy = (y < h) ? y : (h - 1U);
             const uint8_t *su = src_u + (size_t)sy * src_pitch;
@@ -1307,9 +1863,13 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
         uint32_t uv_h     = h / 2U;
         uint32_t uv_ah    = ctx->uv_aligned_h;
         if (fmt == NV_ENC_BUFFER_FORMAT_IYUV || fmt == NV_ENC_BUFFER_FORMAT_YV12) {
-            const uint8_t *p1 = src + (size_t)src_pitch * (size_t)h;
+            const uint8_t *p1 = (chroma_offset && chroma_offset[0] > 0U)
+                                    ? (src + chroma_offset[0])
+                                    : (src + (size_t)src_pitch * (size_t)h);
             uint32_t cp = src_pitch / 2U;
-            const uint8_t *p2 = p1 + (size_t)cp * (size_t)uv_h;
+            const uint8_t *p2 = (chroma_offset && chroma_offset[1] > 0U)
+                                    ? (src + chroma_offset[1])
+                                    : (p1 + (size_t)cp * (size_t)uv_h);
             const uint8_t *su = (fmt == NV_ENC_BUFFER_FORMAT_IYUV) ? p1 : p2;
             const uint8_t *sv = (fmt == NV_ENC_BUFFER_FORMAT_IYUV) ? p2 : p1;
             for (uint32_t y = 0U; y < uv_ah; y++) {
@@ -1326,7 +1886,9 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                 }
             }
         } else {
-            const uint8_t *src_uv = src + (size_t)src_pitch * (size_t)h;
+            const uint8_t *src_uv = (chroma_offset && chroma_offset[0] > 0U)
+                                        ? (src + chroma_offset[0])
+                                        : (src + (size_t)src_pitch * (size_t)h);
             for (uint32_t y = 0U; y < uv_ah; y++) {
                 uint32_t sy = (y < uv_h) ? y : (uv_h - 1U);
                 const uint8_t *srow = src_uv + (size_t)sy * src_pitch;
@@ -1353,14 +1915,27 @@ void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
                               uint32_t gop_length,
                               uint32_t qp,
                               uint32_t qp_p,
+                              uint32_t rc_mode,
+                              uint32_t average_bitrate,
+                              uint32_t max_bitrate,
+                              uint32_t vbv_buffer_size,
+                              uint32_t fps_num,
+                              uint32_t fps_den,
                               int force_idr)
 {
     if (!ctx) {
         return;
     }
-    ctx->cfg.gop_length = gop_length;
-    ctx->cfg.qp         = qp;
-    ctx->cfg.qp_p       = qp_p;
+    ctx->cfg.gop_length      = gop_length;
+    ctx->cfg.qp              = qp;
+    ctx->cfg.qp_p            = qp_p;
+    ctx->cfg.rc_mode         = rc_mode;
+    ctx->cfg.average_bitrate = average_bitrate;
+    ctx->cfg.max_bitrate     = max_bitrate;
+    ctx->cfg.vbv_buffer_size = vbv_buffer_size;
+    ctx->cfg.fps_num         = fps_num;
+    ctx->cfg.fps_den         = fps_den;
+    rc_init_state(ctx);
     if (force_idr) {
         open_nvenc_hw_invalidate_refs(ctx);
     }
@@ -1370,12 +1945,14 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
                                        const uint8_t *src_data,
                                        uint32_t src_pitch,
                                        NV_ENC_BUFFER_FORMAT src_fmt,
+                                       const uint32_t chroma_offset[2],
                                        int force_idr,
                                        int emit_spspps,
                                        uint8_t *out_bs,
                                        size_t out_bs_cap,
                                        size_t *out_bs_len,
                                        int *out_is_idr,
+                                       uint32_t *out_avg_qp,
                                        open_nvenc_rm_stats_t *rm_stats,
                                        char *err_buf, size_t err_cap)
 {
@@ -1394,13 +1971,18 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
         ctx->force_next_idr = 0;
     }
 
-    /* Reset PB write cursor when wrapping around safely */
+    /* Reset PB write cursor safely before CE region (+0x1e000 -> 0x7800 DW) */
     if (ctx->pb_dw_cur > 0x7000U) {
         ctx->pb_dw_cur = 0U;
     }
 
-    copy_surface_to_gpu(ctx, src_data, src_pitch, src_fmt);
-    build_pic_setup(ctx, (uint8_t *)ctx->pic_setup_buf.cpu, is_idr, ref_slot, cur_slot);
+    uint32_t frame_qp = rc_select_frame_qp(ctx, is_idr);
+    copy_surface_to_gpu(ctx, src_data, src_pitch, src_fmt, chroma_offset);
+    if (ctx->cfg.is_h264) {
+        build_pic_setup_h264(ctx, (uint8_t *)ctx->pic_setup_buf.cpu, is_idr, ref_slot, cur_slot, frame_qp);
+    } else {
+        build_pic_setup(ctx, (uint8_t *)ctx->pic_setup_buf.cpu, is_idr, ref_slot, cur_slot, frame_qp);
+    }
     memset(ctx->status_buf.cpu, 0, 0x100U);
     memset(ctx->bs_buf.cpu, 0, 0x200U);
 
@@ -1415,11 +1997,18 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
 #define EMIT_M(mbyte, v) \
     do { pb[ctx->pb_dw_cur++] = pb_hdr_inc(4U, (mbyte), 1U); pb[ctx->pb_dw_cur++] = (uint32_t)(v); } while (0)
 
-    EMIT_M(0x0200U, 0x00000003U);
-    EMIT_M(0x0700U, 0x00001104U); /* HEVC */
+    EMIT_M(0x0200U, ctx->cfg.is_h264 ? 0x00000001U : 0x00000003U);
+    EMIT_M(0x0700U, ctx->cfg.is_h264 ? 0x00001303U : 0x00001104U);
     EMIT_M(0x0704U, ctx->frame_num);
     EMIT_M(0x0710U, (uint32_t)(ctx->pic_setup_buf.gpu_va >> 8));
     EMIT_M(0x0720U, (uint32_t)(ctx->scratch_buf.gpu_va >> 8));
+    if (ctx->cfg.is_h264) {
+        uint64_t mv_half = (uint64_t)(ctx->h264_mv_buf.size / 2U);
+        if (!is_idr) {
+            EMIT_M(0x0728U, (uint32_t)((ctx->h264_mv_buf.gpu_va + (uint64_t)ref_slot * mv_half) >> 8));
+        }
+        EMIT_M(0x072cU, (uint32_t)((ctx->h264_mv_buf.gpu_va + (uint64_t)cur_slot * mv_half) >> 8));
+    }
     EMIT_M(0x0724U, (uint32_t)(ctx->qm_rc_buf.gpu_va >> 8));
     EMIT_M(0x0730U, (uint32_t)(ctx->recon_buf[cur_slot].gpu_va >> 8));
     EMIT_M(0x074cU, (uint32_t)(ctx->recon_buf[cur_slot].gpu_va >> 8));
@@ -1467,21 +2056,37 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
         rm_stats->last_hw_encoded_bits = encoded_bits;
     }
 
-    const uint8_t *hw_slice = (const uint8_t *)ctx->bs_buf.cpu + 0x100U;
-    if (slice_bytes < 5U || slice_bytes > (ctx->bs_buf.size - 0x100U)) {
+    const uint8_t *bs_base = (const uint8_t *)ctx->bs_buf.cpu;
+    size_t bs_off = ctx->cfg.is_h264 ? 0U : 0x100U;
+    if (ctx->cfg.is_h264 &&
+        !(bs_base[0] == 0x00U && bs_base[1] == 0x00U &&
+          (bs_base[2] == 0x01U || (bs_base[2] == 0x00U && bs_base[3] == 0x01U)))) {
+        for (size_t s = 0U; s < 0x200U && (s + 3U) < ctx->bs_buf.size; s++) {
+            if (bs_base[s] == 0x00U && bs_base[s + 1U] == 0x00U && bs_base[s + 2U] == 0x01U) {
+                bs_off = (s > 0U && bs_base[s - 1U] == 0x00U) ? (s - 1U) : s;
+                break;
+            }
+        }
+    }
+    const uint8_t *hw_slice = bs_base + bs_off;
+    if (slice_bytes < 5U || slice_bytes > (ctx->bs_buf.size - bs_off)) {
         snprintf(err_buf, err_cap, "Invalid Falcon encoded_bits=%u", encoded_bits);
         return NV_ENC_ERR_GENERIC;
     }
 
-    /* Emit VPS+SPS+PPS on IDR or OUTPUT_SPSPPS, then 4-byte Annex-B slice */
+    /* Emit parameter sets on IDR or OUTPUT_SPSPPS, then 4-byte Annex-B slice */
     size_t hdr_len = 0U;
     if (is_idr || emit_spspps) {
-        hdr_len = open_nvenc_hevc_write_headers(out_bs, out_bs_cap,
-                                                ctx->cfg.width, ctx->cfg.height,
-                                                ctx->cfg.chroma_format_idc,
-                                                ctx->cfg.bit_depth);
+        hdr_len = ctx->cfg.is_h264
+                      ? open_nvenc_h264_write_headers(out_bs, out_bs_cap,
+                                                      ctx->cfg.width, ctx->cfg.height,
+                                                      ctx->cfg.chroma_format_idc)
+                      : open_nvenc_hevc_write_headers(out_bs, out_bs_cap,
+                                                      ctx->cfg.width, ctx->cfg.height,
+                                                      ctx->cfg.chroma_format_idc,
+                                                      ctx->cfg.bit_depth);
         if (hdr_len == 0U) {
-            set_err(err_buf, err_cap, "open_nvenc_hevc_write_headers failed");
+            set_err(err_buf, err_cap, "parameter set header generation failed");
             return NV_ENC_ERR_NOT_ENOUGH_BUFFER;
         }
     }
@@ -1501,6 +2106,8 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
     memcpy(out_bs + pos, hw_slice, slice_bytes);
     pos += slice_bytes;
 
+    rc_update_after_frame(ctx, encoded_bits, is_idr);
+
     ctx->last_recon_slot = cur_slot;
     ctx->has_ref         = 1;
     ctx->frame_num++;
@@ -1508,6 +2115,9 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
 
     if (out_is_idr) {
         *out_is_idr = is_idr;
+    }
+    if (out_avg_qp) {
+        *out_avg_qp = frame_qp;
     }
     *out_bs_len = pos;
     return NV_ENC_SUCCESS;
@@ -1523,7 +2133,7 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
                                      open_nvenc_rm_stats_t *rm_stats,
                                      char *err_buf, size_t err_cap)
 {
-    return open_nvenc_hw_encode_frame(ctx, src_data, src_pitch, src_fmt,
+    return open_nvenc_hw_encode_frame(ctx, src_data, src_pitch, src_fmt, NULL,
                                       1, 1, out_bs, out_bs_cap, out_bs_len,
-                                      NULL, rm_stats, err_buf, err_cap);
+                                      NULL, NULL, rm_stats, err_buf, err_cap);
 }

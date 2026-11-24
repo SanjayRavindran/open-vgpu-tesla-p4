@@ -39,6 +39,20 @@ static void fill_pattern_frame(uint8_t *buf, uint32_t pitch, uint32_t w, uint32_
                 uv[(size_t)r * pitch + c + 1U] = (uint8_t)(180U - (cs * 80U) / w);
             }
         }
+    } else if (fmt == NV_ENC_BUFFER_FORMAT_YUV444) {
+        uint8_t *y = buf;
+        uint8_t *u = y + (size_t)pitch * (size_t)h;
+        uint8_t *v = u + (size_t)pitch * (size_t)h;
+        for (uint32_t r = 0; r < h; r++) {
+            for (uint32_t c = 0; c < w; c++) {
+                uint32_t cs = c + shift;
+                uint32_t cm = cs % w;
+                int checker = (((r / 16U) + (cs / 16U)) & 1U) ? 40 : 0;
+                y[(size_t)r * pitch + c] = (uint8_t)((16U + ((cm * 180U) / w) + checker) & 0xffU);
+                u[(size_t)r * pitch + c] = (uint8_t)((64U + (r * 120U) / h) & 0xffU);
+                v[(size_t)r * pitch + c] = (uint8_t)((192U - (cm * 100U) / w) & 0xffU);
+            }
+        }
     } else if (fmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT) {
         uint16_t *y = (uint16_t *)buf;
         uint32_t p16 = pitch / 2U;
@@ -80,16 +94,21 @@ static void fill_pattern_frame(uint8_t *buf, uint32_t pitch, uint32_t w, uint32_
     }
 }
 
-static void run_hw_gop_case(NV_ENCODE_API_FUNCTION_LIST *fn,
-                            const char *out_path,
-                            uint32_t w, uint32_t h,
-                            NV_ENC_BUFFER_FORMAT fmt,
-                            NVENC_GUID profile,
-                            uint32_t chroma_idc,
-                            NV_ENC_BIT_DEPTH bit_depth,
-                            uint32_t num_frames,
-                            uint32_t gop_length,
-                            int invalidate_at_frame)
+static void run_hw_codec_gop_case(NV_ENCODE_API_FUNCTION_LIST *fn,
+                                  const char *out_path,
+                                  NVENC_GUID codec_guid,
+                                  uint32_t w, uint32_t h,
+                                  NV_ENC_BUFFER_FORMAT fmt,
+                                  NVENC_GUID profile,
+                                  uint32_t chroma_idc,
+                                  NV_ENC_BIT_DEPTH bit_depth,
+                                  uint32_t num_frames,
+                                  uint32_t gop_length,
+                                  int invalidate_at_frame,
+                                  uint32_t rc_mode,
+                                  uint32_t avg_bitrate,
+                                  uint32_t max_bitrate,
+                                  uint32_t fps)
 {
     int dummy_dev = 0x10de;
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS open_p;
@@ -108,26 +127,34 @@ static void run_hw_gop_case(NV_ENCODE_API_FUNCTION_LIST *fn,
     preset.version           = NV_ENC_PRESET_CONFIG_VER;
     preset.presetCfg.version = NV_ENC_CONFIG_VER;
     assert(fn->nvEncGetEncodePresetConfigEx(
-        enc, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P4_GUID,
+        enc, codec_guid, NV_ENC_PRESET_P4_GUID,
         NV_ENC_TUNING_INFO_LOW_LATENCY, &preset) == NV_ENC_SUCCESS);
 
-    preset.presetCfg.gopLength                                    = gop_length;
-    preset.presetCfg.profileGUID                                  = profile;
-    preset.presetCfg.encodeCodecConfig.hevcConfig.chromaFormatIDC = chroma_idc;
-    preset.presetCfg.encodeCodecConfig.hevcConfig.outputBitDepth  = bit_depth;
-    preset.presetCfg.encodeCodecConfig.hevcConfig.inputBitDepth   = bit_depth;
-    preset.presetCfg.rcParams.constQP.qpIntra                     = 24U;
-    preset.presetCfg.rcParams.constQP.qpInterP                    = 24U;
-    preset.presetCfg.rcParams.constQP.qpInterB                    = 24U;
+    preset.presetCfg.gopLength   = gop_length;
+    preset.presetCfg.profileGUID = profile;
+    if (memcmp(&codec_guid, &NV_ENC_CODEC_H264_GUID, sizeof(codec_guid)) == 0) {
+        preset.presetCfg.encodeCodecConfig.h264Config.chromaFormatIDC = chroma_idc;
+        preset.presetCfg.encodeCodecConfig.h264Config.idrPeriod       = gop_length;
+    } else {
+        preset.presetCfg.encodeCodecConfig.hevcConfig.chromaFormatIDC = chroma_idc;
+        preset.presetCfg.encodeCodecConfig.hevcConfig.outputBitDepth  = bit_depth;
+        preset.presetCfg.encodeCodecConfig.hevcConfig.inputBitDepth   = bit_depth;
+    }
+    preset.presetCfg.rcParams.rateControlMode = rc_mode;
+    preset.presetCfg.rcParams.averageBitRate  = avg_bitrate;
+    preset.presetCfg.rcParams.maxBitRate      = max_bitrate;
+    preset.presetCfg.rcParams.constQP.qpIntra  = 24U;
+    preset.presetCfg.rcParams.constQP.qpInterP = 24U;
+    preset.presetCfg.rcParams.constQP.qpInterB = 24U;
 
     NV_ENC_INITIALIZE_PARAMS init_p;
     memset(&init_p, 0, sizeof(init_p));
     init_p.version      = NV_ENC_INITIALIZE_PARAMS_VER;
-    init_p.encodeGUID   = NV_ENC_CODEC_HEVC_GUID;
+    init_p.encodeGUID   = codec_guid;
     init_p.presetGUID   = NV_ENC_PRESET_P4_GUID;
     init_p.encodeWidth  = w;
     init_p.encodeHeight = h;
-    init_p.frameRateNum = 60U;
+    init_p.frameRateNum = fps ? fps : 60U;
     init_p.frameRateDen = 1U;
     init_p.tuningInfo   = NV_ENC_TUNING_INFO_LOW_LATENCY;
     init_p.bufferFormat = fmt;
@@ -228,6 +255,22 @@ static void run_hw_gop_case(NV_ENCODE_API_FUNCTION_LIST *fn,
     assert(fn->nvEncDestroyEncoder(enc) == NV_ENC_SUCCESS);
 }
 
+static void run_hw_gop_case(NV_ENCODE_API_FUNCTION_LIST *fn,
+                            const char *out_path,
+                            uint32_t w, uint32_t h,
+                            NV_ENC_BUFFER_FORMAT fmt,
+                            NVENC_GUID profile,
+                            uint32_t chroma_idc,
+                            NV_ENC_BIT_DEPTH bit_depth,
+                            uint32_t num_frames,
+                            uint32_t gop_length,
+                            int invalidate_at_frame)
+{
+    run_hw_codec_gop_case(fn, out_path, NV_ENC_CODEC_HEVC_GUID, w, h, fmt, profile,
+                          chroma_idc, bit_depth, num_frames, gop_length,
+                          invalidate_at_frame, NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 60U);
+}
+
 static void run_hw_case(NV_ENCODE_API_FUNCTION_LIST *fn,
                         const char *out_path,
                         uint32_t w, uint32_t h,
@@ -252,6 +295,7 @@ int main(void)
 
     mkdir("/tmp/open_nvenc_hw_test", 0755);
 
+    /* Phase 1: Single-frame IDR coverage */
     run_hw_case(&fn, "/tmp/open_nvenc_hw_test/nv12_256.h265", 256U, 256U,
                 NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_HEVC_PROFILE_MAIN_GUID,
                 1U, NV_ENC_BIT_DEPTH_8);
@@ -278,6 +322,41 @@ int main(void)
                     1920U, 1080U, NV_ENC_BUFFER_FORMAT_YUV444_10BIT,
                     NV_ENC_HEVC_PROFILE_FREXT_GUID, 3U, NV_ENC_BIT_DEPTH_10,
                     3U, 30U, -1);
+
+    /* Phase 3: H.264 NVC2B7, 8-bit 4:4:4 HEVC, non-32-aligned 1784x992, VBR/CBR RC */
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/h264_nv12_256.h264",
+                          NV_ENC_CODEC_H264_GUID, 256U, 256U,
+                          NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_H264_PROFILE_MAIN_GUID,
+                          1U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 30U);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/h264_y444_256.h264",
+                          NV_ENC_CODEC_H264_GUID, 256U, 256U,
+                          NV_ENC_BUFFER_FORMAT_YUV444, NV_ENC_H264_PROFILE_HIGH_444_GUID,
+                          3U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 30U);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/h264_nv12_720p.h264",
+                          NV_ENC_CODEC_H264_GUID, 1280U, 720U,
+                          NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_H264_PROFILE_MAIN_GUID,
+                          1U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 30U);
+    run_hw_gop_case(&fn, "/tmp/open_nvenc_hw_test/hevc_y444_8b_256.h265",
+                    256U, 256U, NV_ENC_BUFFER_FORMAT_YUV444,
+                    NV_ENC_HEVC_PROFILE_FREXT_GUID, 3U, NV_ENC_BIT_DEPTH_8,
+                    5U, 30U, -1);
+    run_hw_gop_case(&fn, "/tmp/open_nvenc_hw_test/hevc_y444_10b_1784x992.h265",
+                    1784U, 992U, NV_ENC_BUFFER_FORMAT_YUV444_10BIT,
+                    NV_ENC_HEVC_PROFILE_FREXT_GUID, 3U, NV_ENC_BIT_DEPTH_10,
+                    5U, 30U, -1);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/hevc_vbr_720p.h265",
+                          NV_ENC_CODEC_HEVC_GUID, 1280U, 720U,
+                          NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_HEVC_PROFILE_MAIN_GUID,
+                          1U, NV_ENC_BIT_DEPTH_8, 30U, 30U, -1,
+                          NV_ENC_PARAMS_RC_VBR, 1500000U, 2500000U, 30U);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/hevc_cbr_720p.h265",
+                          NV_ENC_CODEC_HEVC_GUID, 1280U, 720U,
+                          NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_HEVC_PROFILE_MAIN_GUID,
+                          1U, NV_ENC_BIT_DEPTH_8, 30U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CBR, 1500000U, 1500000U, 30U);
 
     printf("ALL_OPEN_NVENC_HW_TESTS_PASSED\n");
     return 0;

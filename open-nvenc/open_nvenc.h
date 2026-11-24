@@ -155,6 +155,15 @@ typedef enum _NV_ENC_PIC_FLAGS {
     NV_ENC_PIC_FLAG_EOS           = 0x08U
 } NV_ENC_PIC_FLAGS;
 
+typedef enum _NV_ENC_PARAMS_RC_MODE {
+    NV_ENC_PARAMS_RC_CONSTQP          = 0x0,
+    NV_ENC_PARAMS_RC_VBR              = 0x1,
+    NV_ENC_PARAMS_RC_CBR              = 0x2,
+    NV_ENC_PARAMS_RC_CBR_LOWDELAY_HQ  = 0x8,
+    NV_ENC_PARAMS_RC_CBR_HQ           = 0x10,
+    NV_ENC_PARAMS_RC_VBR_HQ           = 0x20
+} NV_ENC_PARAMS_RC_MODE;
+
 typedef enum _NV_ENC_CAPS {
     NV_ENC_CAPS_NUM_MAX_BFRAMES                  = 0,
     NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES      = 1,
