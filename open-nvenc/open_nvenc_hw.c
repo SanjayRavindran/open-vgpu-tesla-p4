@@ -240,9 +240,10 @@ struct _open_nvenc_hw_ctx {
     hw_buf_t qm_rc_buf;    /* 0x1000 B */
     hw_buf_t status_buf;   /* 0x1000 B */
     hw_buf_t bs_buf;       /* >= 0x65000 B */
-    hw_buf_t io_aux_buf;   /* 0x9000 B */
-    hw_buf_t input_buf;    /* pitch-linear surface */
-    hw_buf_t recon_buf;    /* vidmem recon surface */
+    hw_buf_t io_aux_buf;     /* scaled with CTUs (>= 0x9000 B) */
+    hw_buf_t input_buf;      /* block-linear input surface */
+    hw_buf_t recon_buf[2];   /* double-buffered vidmem recon surfaces */
+    hw_buf_t coloc_mv_buf[2];/* double-buffered vidmem colocated MV buffers */
 
     uint32_t pb_dw_cur;    /* current dword offset in pb_buf */
     uint32_t gp_put;
@@ -251,8 +252,18 @@ struct _open_nvenc_hw_ctx {
     open_nvenc_hw_init_cfg_t cfg;
     uint32_t aligned_w;
     uint32_t aligned_h;
+    uint32_t ctu_w;
+    uint32_t ctu_h;
+    uint32_t n_ctus;
+    uint32_t uv_aligned_h;
     uint32_t surface_pitch;
     size_t   surface_size;
+
+    uint32_t frame_num;
+    uint32_t gop_poc;
+    uint32_t last_recon_slot;
+    int      has_ref;
+    int      force_next_idr;
 };
 
 static uint32_t next_handle(open_nvenc_hw_ctx_t *ctx)
@@ -692,20 +703,29 @@ static void init_qm_rc_buf(uint32_t *qm)
     qm[0x54U / 4U] = 0x0000001aU;
 }
 
-static void build_pic_setup_idr(const open_nvenc_hw_ctx_t *ctx, uint8_t *buf)
+static void build_pic_setup(const open_nvenc_hw_ctx_t *ctx,
+                            uint8_t *buf,
+                            int is_idr,
+                            uint32_t ref_dpb_slot,
+                            uint32_t cur_dpb_slot)
 {
     memset(buf, 0, 0xe000U);
     uint32_t *w = (uint32_t *)buf;
+    (void)cur_dpb_slot;
 
     uint32_t width     = ctx->cfg.width;
     uint32_t aligned_h = ctx->aligned_h;
     uint32_t aligned_w = ctx->aligned_w;
     int      is_444    = (ctx->cfg.chroma_format_idc == 3U);
     int      is_10b    = (ctx->cfg.bit_depth == 10U);
-    uint32_t qp        = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
+    uint32_t qp_i      = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
+    uint32_t qp_p      = (ctx->cfg.qp_p > 0U && ctx->cfg.qp_p <= 51U) ? ctx->cfg.qp_p : qp_i;
+    uint32_t qp        = is_idr ? qp_i : qp_p;
+    uint32_t gop_len   = (ctx->cfg.gop_length > 0U) ? ctx->cfg.gop_length : 0xfaU;
 
     uint32_t y_stride_bytes = aligned_w * (is_10b ? 2U : 1U);
     uint32_t y_plane_pages  = (y_stride_bytes * aligned_h) >> 8; /* in 256B units */
+    uint32_t uv_plane_pages = (y_stride_bytes * ctx->uv_aligned_h) >> 8;
     uint32_t uv_stride_hdr  = is_444 ? (aligned_w * 2U) : aligned_w;
     uint32_t dims_m1        = ((aligned_h - 1U) << 16) | (width - 1U);
     uint32_t stride_word    = (uv_stride_hdr << 16) | aligned_w;
@@ -713,7 +733,7 @@ static void build_pic_setup_idr(const open_nvenc_hw_ctx_t *ctx, uint8_t *buf)
 
     uint32_t slot_w14 = is_444 ? 0U : (y_plane_pages >> 1);
     uint32_t slot_w18 = y_plane_pages;
-    uint32_t slot_w1c = is_444 ? (y_plane_pages * 2U) : (y_plane_pages + (y_plane_pages >> 2));
+    uint32_t slot_w1c = is_444 ? (y_plane_pages * 2U) : (y_plane_pages + (uv_plane_pages >> 1));
 
     w[0x00000U / 4U] = 0xc2b70006U;
 
@@ -748,39 +768,60 @@ static void build_pic_setup_idr(const open_nvenc_hw_ctx_t *ctx, uint8_t *buf)
     w[0x00074U / 4U] = 0x131f0000U | ((qp & 0x3fU) << 8);
     w[0x00078U / 4U] = is_10b ? 0x33f4f4f4U : 0x33000000U;
     w[0x0007cU / 4U] = 0x00003333U;
-    w[0x000a4U / 4U] = 0x000000faU;
+    w[0x000a4U / 4U] = gop_len;
 
-    /* DPB empty slots for IDR */
-    w[0x000d4U / 4U] = 0xfefefefeU;
-    w[0x000d8U / 4U] = 0xfefefefeU;
-    w[0x000dcU / 4U] = 0xfefefefeU;
-    w[0x000e0U / 4U] = 0xfefefefeU;
+    if (is_idr) {
+        /* DPB empty slots for IDR */
+        w[0x000d4U / 4U] = 0xfefefefeU;
+        w[0x000d8U / 4U] = 0xfefefefeU;
+        w[0x000dcU / 4U] = 0xfefefefeU;
+        w[0x000e0U / 4U] = 0xfefefefeU;
+    } else {
+        /* P-frame active L0 reference list & RPS */
+        w[0x000d4U / 4U] = 0xfefefe00U | ((ref_dpb_slot & 0xfU) << 1);
+        w[0x000d8U / 4U] = 0xfefefefeU;
+        w[0x000dcU / 4U] = 0xfefefefeU;
+        w[0x000e0U / 4U] = 0xfefefefeU;
+        w[0x000e4U / 4U] = 0xffffff01U;
+        for (uint32_t off = 0x000e8U; off <= 0x00170U; off += 4U) {
+            int is_hdr = (off == 0x000f4U || off == 0x00104U || off == 0x00114U ||
+                          off == 0x00124U || off == 0x00134U || off == 0x00144U ||
+                          off == 0x00154U || off == 0x00164U);
+            w[off / 4U] = is_hdr ? 0xffff0100U : 0xffffffffU;
+        }
+        w[0x00174U / 4U] = 0xfefefefeU;
+        w[0x00178U / 4U] = 0xfefefefeU;
+    }
 
     /* Internal descriptor offsets, CTU geometry, output bitstream alloc size */
-    uint32_t mbs_cnt = (aligned_w >> 4) * (aligned_h >> 4);
-    uint32_t w_div4  = aligned_w >> 2;
-    int32_t  w_step  = (((int32_t)aligned_w - 256) / 64) * 0x100;
+    uint32_t log2_ctus = 6U;
+    while (log2_ctus < 15U && (1U << log2_ctus) < ctx->n_ctus) {
+        log2_ctus++;
+    }
 
-    w[0x00184U / 4U] = 0x00000002U;
+    w[0x00184U / 4U] = ((ctx->gop_poc & 0xffffU) << 16) | 2U;
     w[0x0018cU / 4U] = 0x00005900U;
     w[0x00190U / 4U] = 0x00000800U;
     w[0x00194U / 4U] = 0x00003800U;
     w[0x00198U / 4U] = 0x00005800U;
-    w[0x0019cU / 4U] = mbs_cnt * 0xccU;
+    w[0x0019cU / 4U] = ((ctx->ctu_w * ((aligned_h >> 4) + 1U) * 3U) / 2U) << 8;
     w[0x001a0U / 4U] = (uint32_t)ctx->bs_buf.size;
     w[0x001a4U / 4U] = 0x000000ffU;
-    w[0x001a8U / 4U] = (uint32_t)((int32_t)0x00ffc6a7 + w_step);
+    w[0x001a8U / 4U] = 0x00ffc0a0U | ((log2_ctus & 0xfU) << 8) | (is_idr ? 7U : 4U);
     w[0x001b0U / 4U] = 0x00000100U;
     w[0x001b4U / 4U] = 0x00000100U;
     w[0x001b8U / 4U] = 0x00000100U;
-    w[0x001bcU / 4U] = 0x00901300U; /* IDR_W_RADL = 19 (0x13) */
+    w[0x001bcU / 4U] = is_idr ? 0x00901300U : 0x00900101U; /* IDR_W_RADL vs TRAIL_R */
 
-    w[0x002acU / 4U] = 0x00002100U;
+    w[0x00288U / 4U] = is_idr ? 0x00000000U : 0x00000001U;
+    w[0x002acU / 4U] = ((aligned_h >> 3) + 1U) << 8;
     w[0x002b0U / 4U] = 0x00006900U;
     w[0x002b4U / 4U] = 0x00010000U;
-    w[0x002e4U / 4U] = 0x00001100U;
+    w[0x002e4U / 4U] = ((aligned_h >> 4) + 1U) << 8;
     w[0x002e8U / 4U] = 0x00000100U;
-    w[0x0030cU / 4U] = 0x09e34000U;
+    w[0x0030cU / 4U] = (ctx->n_ctus > 1024U)
+                           ? 0x16698000U
+                           : ((ctx->n_ctus > 256U) ? 0x0a1b8000U : 0x09e34000U);
 
     /* Motion/search/CU cost parameters (+0x800 block) */
     w[0x00800U / 4U] = 0x00074002U;
@@ -812,8 +853,8 @@ static void build_pic_setup_idr(const open_nvenc_hw_ctx_t *ctx, uint8_t *buf)
     w[0x05808U / 4U] = 0x000f0f0fU;
 
     /* Slice header template (+0x5900 block) */
-    w[0x05900U / 4U] = 0x00980000U | (w_div4 & 0xffffU);
-    w[0x05904U / 4U] = 0x18000204U;
+    w[0x05900U / 4U] = (is_idr ? 0x00980000U : 0x00c00000U) | (ctx->n_ctus & 0xffffU);
+    w[0x05904U / 4U] = is_idr ? 0x18000204U : 0x18000200U;
 }
 
 int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
@@ -852,9 +893,11 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     nv_register_fd_t rfd;
     rfd.ctl_fd = ctx->ctl_fd;
     if (ioctl(ctx->dev_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, nv_register_fd_t), &rfd) < 0) {
-        set_err(err_buf, err_cap, "NV_ESC_REGISTER_FD failed");
-        free(ctx);
-        return -EIO;
+        if (errno != EINVAL && errno != EBUSY && errno != EEXIST) {
+            set_err(err_buf, err_cap, "NV_ESC_REGISTER_FD failed");
+            free(ctx);
+            return -EIO;
+        }
     }
 
     /* 1. Root client (0x41) -> Device (0x80) -> Subdevice (0x2080) -> VASpace (0x70) -> SW (0xa0bc) */
@@ -1015,14 +1058,20 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     (void)rm_ctrl(ctx->ctl_fd, ctx->h_client, ctx->h_channel, NV906F_CTRL_CMD_GET_CLASS_ENGINEID,
                   cls_eng_id, sizeof(cls_eng_id), rm_stats, &st);
 
-    /* 4. Allocate descriptor, QM/RC, status, bitstream, io_aux, scratch & surface buffers (32x32 HEVC CTU aligned) */
-    ctx->aligned_w = (cfg->width + 31U) & ~31U;
-    ctx->aligned_h = (cfg->height + 31U) & ~31U;
-    uint32_t bpp   = (cfg->bit_depth == 10U) ? 2U : 1U;
+    /* 4. Allocate descriptor, QM/RC, status, bitstream, io_aux, scratch & double-buffered surface/coloc buffers */
+    ctx->aligned_w    = (cfg->width + 31U) & ~31U;
+    ctx->aligned_h    = (cfg->height + 31U) & ~31U;
+    ctx->ctu_w        = ctx->aligned_w >> 5;
+    ctx->ctu_h        = ctx->aligned_h >> 5;
+    ctx->n_ctus       = ctx->ctu_w * ctx->ctu_h;
+    int is_444_fmt    = (cfg->chroma_format_idc == 3U);
+    ctx->uv_aligned_h = is_444_fmt ? ctx->aligned_h : (((ctx->aligned_h >> 1) + 31U) & ~31U);
+
+    uint32_t bpp       = (cfg->bit_depth == 10U) ? 2U : 1U;
     ctx->surface_pitch = ctx->aligned_w * bpp;
-    ctx->surface_size  = (cfg->chroma_format_idc == 3U)
+    ctx->surface_size  = is_444_fmt
                              ? ((size_t)ctx->surface_pitch * (size_t)ctx->aligned_h * 3U)
-                             : (((size_t)ctx->surface_pitch * (size_t)ctx->aligned_h * 3U) / 2U);
+                             : ((size_t)ctx->surface_pitch * ((size_t)ctx->aligned_h + (size_t)ctx->uv_aligned_h));
     if (ctx->surface_size < 0x18000U) {
         ctx->surface_size = 0x18000U;
     }
@@ -1034,14 +1083,35 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     }
     bs_size = (bs_size + 0xfffU) & ~(size_t)0xfffU;
 
+    size_t scratch_size = (size_t)ctx->n_ctus * 1024U;
+    if (scratch_size < 0x10000U) {
+        scratch_size = 0x10000U;
+    }
+    scratch_size = (scratch_size + 0xffffU) & ~(size_t)0xffffU;
+
+    size_t io_aux_size = 0x8000U + ((size_t)ctx->n_ctus * 80U);
+    if (io_aux_size < 0x9000U) {
+        io_aux_size = 0x9000U;
+    }
+    io_aux_size = (io_aux_size + 0xfffU) & ~(size_t)0xfffU;
+
+    size_t coloc_size = (size_t)ctx->n_ctus * 256U;
+    if (coloc_size < 0x20000U) {
+        coloc_size = 0x20000U;
+    }
+    coloc_size = (coloc_size + 0xfffU) & ~(size_t)0xfffU;
+
     if (alloc_buf_sysmem(ctx, &ctx->pic_setup_buf, 0xe000ULL, 1, rm_stats, err_buf, err_cap) < 0 ||
-        alloc_buf_vidmem(ctx, &ctx->scratch_buf, 0x10000ULL, rm_stats, err_buf, err_cap) < 0 ||
+        alloc_buf_vidmem(ctx, &ctx->scratch_buf, scratch_size, rm_stats, err_buf, err_cap) < 0 ||
         alloc_buf_sysmem(ctx, &ctx->qm_rc_buf, 0x1000ULL, 1, rm_stats, err_buf, err_cap) < 0 ||
         alloc_buf_sysmem(ctx, &ctx->status_buf, 0x1000ULL, 1, rm_stats, err_buf, err_cap) < 0 ||
         alloc_buf_sysmem(ctx, &ctx->bs_buf, bs_size, 1, rm_stats, err_buf, err_cap) < 0 ||
-        alloc_buf_sysmem(ctx, &ctx->io_aux_buf, 0x9000ULL, 1, rm_stats, err_buf, err_cap) < 0 ||
+        alloc_buf_sysmem(ctx, &ctx->io_aux_buf, io_aux_size, 1, rm_stats, err_buf, err_cap) < 0 ||
         alloc_buf_sysmem(ctx, &ctx->input_buf, ctx->surface_size, 1, rm_stats, err_buf, err_cap) < 0 ||
-        alloc_buf_vidmem(ctx, &ctx->recon_buf, ctx->surface_size, rm_stats, err_buf, err_cap) < 0) {
+        alloc_buf_vidmem(ctx, &ctx->recon_buf[0], ctx->surface_size, rm_stats, err_buf, err_cap) < 0 ||
+        alloc_buf_vidmem(ctx, &ctx->recon_buf[1], ctx->surface_size, rm_stats, err_buf, err_cap) < 0 ||
+        alloc_buf_vidmem(ctx, &ctx->coloc_mv_buf[0], coloc_size, rm_stats, err_buf, err_cap) < 0 ||
+        alloc_buf_vidmem(ctx, &ctx->coloc_mv_buf[1], coloc_size, rm_stats, err_buf, err_cap) < 0) {
         goto fail;
     }
 
@@ -1087,7 +1157,10 @@ void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx, open_nvenc_rm_stats_t *rm_s
     if (!ctx) {
         return;
     }
-    free_hw_buf(ctx, &ctx->recon_buf, ctx->h_vaspace, rm_stats);
+    free_hw_buf(ctx, &ctx->coloc_mv_buf[1], ctx->h_vaspace, rm_stats);
+    free_hw_buf(ctx, &ctx->coloc_mv_buf[0], ctx->h_vaspace, rm_stats);
+    free_hw_buf(ctx, &ctx->recon_buf[1], ctx->h_vaspace, rm_stats);
+    free_hw_buf(ctx, &ctx->recon_buf[0], ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->input_buf, ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->io_aux_buf, ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->bs_buf, ctx->h_vaspace, rm_stats);
@@ -1232,7 +1305,7 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
         uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
         size_t   uv_avail = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
         uint32_t uv_h     = h / 2U;
-        uint32_t uv_ah    = ah / 2U;
+        uint32_t uv_ah    = ctx->uv_aligned_h;
         if (fmt == NV_ENC_BUFFER_FORMAT_IYUV || fmt == NV_ENC_BUFFER_FORMAT_YV12) {
             const uint8_t *p1 = src + (size_t)src_pitch * (size_t)h;
             uint32_t cp = src_pitch / 2U;
@@ -1268,18 +1341,57 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
     }
 }
 
-NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
-                                     const uint8_t *src_data,
-                                     uint32_t src_pitch,
-                                     NV_ENC_BUFFER_FORMAT src_fmt,
-                                     uint8_t *out_bs,
-                                     size_t out_bs_cap,
-                                     size_t *out_bs_len,
-                                     open_nvenc_rm_stats_t *rm_stats,
-                                     char *err_buf, size_t err_cap)
+void open_nvenc_hw_invalidate_refs(open_nvenc_hw_ctx_t *ctx)
+{
+    if (ctx) {
+        ctx->has_ref        = 0;
+        ctx->force_next_idr = 1;
+    }
+}
+
+void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
+                              uint32_t gop_length,
+                              uint32_t qp,
+                              uint32_t qp_p,
+                              int force_idr)
+{
+    if (!ctx) {
+        return;
+    }
+    ctx->cfg.gop_length = gop_length;
+    ctx->cfg.qp         = qp;
+    ctx->cfg.qp_p       = qp_p;
+    if (force_idr) {
+        open_nvenc_hw_invalidate_refs(ctx);
+    }
+}
+
+NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
+                                       const uint8_t *src_data,
+                                       uint32_t src_pitch,
+                                       NV_ENC_BUFFER_FORMAT src_fmt,
+                                       int force_idr,
+                                       int emit_spspps,
+                                       uint8_t *out_bs,
+                                       size_t out_bs_cap,
+                                       size_t *out_bs_len,
+                                       int *out_is_idr,
+                                       open_nvenc_rm_stats_t *rm_stats,
+                                       char *err_buf, size_t err_cap)
 {
     if (!ctx || !out_bs || !out_bs_len) {
         return NV_ENC_ERR_INVALID_PTR;
+    }
+
+    int is_idr = (!ctx->has_ref || force_idr || ctx->force_next_idr ||
+                  (ctx->cfg.gop_length > 0U && ctx->gop_poc >= ctx->cfg.gop_length))
+                     ? 1
+                     : 0;
+    uint32_t ref_slot = ctx->last_recon_slot & 1U;
+    uint32_t cur_slot = is_idr ? 0U : (ref_slot ^ 1U);
+    if (is_idr) {
+        ctx->gop_poc        = 0U;
+        ctx->force_next_idr = 0;
     }
 
     /* Reset PB write cursor when wrapping around safely */
@@ -1288,7 +1400,7 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
     }
 
     copy_surface_to_gpu(ctx, src_data, src_pitch, src_fmt);
-    build_pic_setup_idr(ctx, (uint8_t *)ctx->pic_setup_buf.cpu);
+    build_pic_setup(ctx, (uint8_t *)ctx->pic_setup_buf.cpu, is_idr, ref_slot, cur_slot);
     memset(ctx->status_buf.cpu, 0, 0x100U);
     memset(ctx->bs_buf.cpu, 0, 0x200U);
 
@@ -1305,12 +1417,18 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
 
     EMIT_M(0x0200U, 0x00000003U);
     EMIT_M(0x0700U, 0x00001104U); /* HEVC */
-    EMIT_M(0x0704U, 0x00000000U);
+    EMIT_M(0x0704U, ctx->frame_num);
     EMIT_M(0x0710U, (uint32_t)(ctx->pic_setup_buf.gpu_va >> 8));
     EMIT_M(0x0720U, (uint32_t)(ctx->scratch_buf.gpu_va >> 8));
     EMIT_M(0x0724U, (uint32_t)(ctx->qm_rc_buf.gpu_va >> 8));
-    EMIT_M(0x0730U, (uint32_t)(ctx->recon_buf.gpu_va >> 8));
-    EMIT_M(0x074cU, (uint32_t)(ctx->recon_buf.gpu_va >> 8));
+    EMIT_M(0x0730U, (uint32_t)(ctx->recon_buf[cur_slot].gpu_va >> 8));
+    EMIT_M(0x074cU, (uint32_t)(ctx->recon_buf[cur_slot].gpu_va >> 8));
+    if (!is_idr) {
+        EMIT_M(0x0738U, (uint32_t)(ctx->coloc_mv_buf[ref_slot].gpu_va >> 8));
+        EMIT_M(0x073cU, (uint32_t)(ctx->coloc_mv_buf[cur_slot].gpu_va >> 8));
+        EMIT_M(0x0400U + (ref_slot * 4U), (uint32_t)(ctx->recon_buf[ref_slot].gpu_va >> 8));
+        EMIT_M(0x0440U + (ref_slot * 4U), (uint32_t)(ctx->recon_buf[ref_slot].gpu_va >> 8));
+    }
     EMIT_M(0x0718U, (uint32_t)(ctx->status_buf.gpu_va >> 8));
     EMIT_M(0x071cU, (uint32_t)(ctx->bs_buf.gpu_va >> 8));
     EMIT_M(0x0734U, (uint32_t)(ctx->input_buf.gpu_va >> 8));
@@ -1330,7 +1448,7 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
     __sync_synchronize();
     submit_pb_range(ctx, start, ctx->pb_dw_cur - start, 0);
 
-    if (wait_sema_equal(sema_word, done_token, 500) < 0) {
+    if (wait_sema_equal(sema_word, done_token, 2000) < 0) {
         volatile uint32_t *st_words = (volatile uint32_t *)ctx->status_buf.cpu;
         snprintf(err_buf, err_cap, "NVC2B7_EXECUTE timeout (status[1]=%u bits=%u sema=%u)",
                  st_words[1], st_words[2], *sema_word);
@@ -1355,14 +1473,17 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
         return NV_ENC_ERR_GENERIC;
     }
 
-    /* Emit VPS+SPS+PPS + 4-byte Annex-B IDR slice */
-    size_t hdr_len = open_nvenc_hevc_write_headers(out_bs, out_bs_cap,
-                                                   ctx->cfg.width, ctx->cfg.height,
-                                                   ctx->cfg.chroma_format_idc,
-                                                   ctx->cfg.bit_depth);
-    if (hdr_len == 0U) {
-        set_err(err_buf, err_cap, "open_nvenc_hevc_write_headers failed");
-        return NV_ENC_ERR_NOT_ENOUGH_BUFFER;
+    /* Emit VPS+SPS+PPS on IDR or OUTPUT_SPSPPS, then 4-byte Annex-B slice */
+    size_t hdr_len = 0U;
+    if (is_idr || emit_spspps) {
+        hdr_len = open_nvenc_hevc_write_headers(out_bs, out_bs_cap,
+                                                ctx->cfg.width, ctx->cfg.height,
+                                                ctx->cfg.chroma_format_idc,
+                                                ctx->cfg.bit_depth);
+        if (hdr_len == 0U) {
+            set_err(err_buf, err_cap, "open_nvenc_hevc_write_headers failed");
+            return NV_ENC_ERR_NOT_ENOUGH_BUFFER;
+        }
     }
 
     /* Convert Falcon's 3-byte startcode at +0x100 into 4-byte Annex-B if needed */
@@ -1380,6 +1501,29 @@ NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
     memcpy(out_bs + pos, hw_slice, slice_bytes);
     pos += slice_bytes;
 
+    ctx->last_recon_slot = cur_slot;
+    ctx->has_ref         = 1;
+    ctx->frame_num++;
+    ctx->gop_poc++;
+
+    if (out_is_idr) {
+        *out_is_idr = is_idr;
+    }
     *out_bs_len = pos;
     return NV_ENC_SUCCESS;
+}
+
+NVENCSTATUS open_nvenc_hw_encode_idr(open_nvenc_hw_ctx_t *ctx,
+                                     const uint8_t *src_data,
+                                     uint32_t src_pitch,
+                                     NV_ENC_BUFFER_FORMAT src_fmt,
+                                     uint8_t *out_bs,
+                                     size_t out_bs_cap,
+                                     size_t *out_bs_len,
+                                     open_nvenc_rm_stats_t *rm_stats,
+                                     char *err_buf, size_t err_cap)
+{
+    return open_nvenc_hw_encode_frame(ctx, src_data, src_pitch, src_fmt,
+                                      1, 1, out_bs, out_bs_cap, out_bs_len,
+                                      NULL, rm_stats, err_buf, err_cap);
 }

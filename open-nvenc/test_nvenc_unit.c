@@ -245,13 +245,39 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
     lock_bs.outputBitstream = bs_buf.bitstreamBuffer;
     assert(fn.nvEncLockBitstream(encoder, &lock_bs) == NV_ENC_SUCCESS);
     assert(lock_bs.bitstreamSizeInBytes >= 32U);
+    assert(lock_bs.pictureType == NV_ENC_PIC_TYPE_IDR);
     const uint8_t *nal = (const uint8_t *)lock_bs.bitstreamBufferPtr;
     assert(nal[0] == 0x00 && nal[1] == 0x00 && nal[2] == 0x00 && nal[3] == 0x01);
     assert(fn.nvEncUnlockBitstream(encoder, bs_buf.bitstreamBuffer) == NV_ENC_SUCCESS);
 
+    /* Frame 1: P-frame */
+    pic.inputTimeStamp = 2000ULL;
+    pic.encodePicFlags = 0U;
+    assert(fn.nvEncEncodePicture(encoder, &pic) == NV_ENC_SUCCESS);
+    assert(fn.nvEncLockBitstream(encoder, &lock_bs) == NV_ENC_SUCCESS);
+    assert(lock_bs.pictureType == NV_ENC_PIC_TYPE_P);
+    assert(fn.nvEncUnlockBitstream(encoder, bs_buf.bitstreamBuffer) == NV_ENC_SUCCESS);
+
+    /* ForceIDR + ReconfigureEncoder */
+    NV_ENC_RECONFIGURE_PARAMS rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.version            = NV_ENC_RECONFIGURE_PARAMS_VER;
+    rec.reInitEncodeParams = init_params;
+    preset_cfg.presetCfg.gopLength = 60U;
+    rec.forceIDR           = 1U;
+    assert(fn.nvEncReconfigureEncoder(encoder, &rec) == NV_ENC_SUCCESS);
+    assert(fn.nvEncInvalidateRefFrames(encoder, 2000ULL) == NV_ENC_SUCCESS);
+
+    pic.inputTimeStamp = 3000ULL;
+    pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
+    assert(fn.nvEncEncodePicture(encoder, &pic) == NV_ENC_SUCCESS);
+    assert(fn.nvEncLockBitstream(encoder, &lock_bs) == NV_ENC_SUCCESS);
+    assert(lock_bs.pictureType == NV_ENC_PIC_TYPE_IDR);
+    assert(fn.nvEncUnlockBitstream(encoder, bs_buf.bitstreamBuffer) == NV_ENC_SUCCESS);
+
     open_nvenc_rm_stats_t stats;
     assert(open_nvenc_get_rm_stats(encoder, &stats) == 0);
-    assert(stats.frames_encoded == 1U);
+    assert(stats.frames_encoded == 3U);
 
     assert(fn.nvEncDestroyBitstreamBuffer(encoder, bs_buf.bitstreamBuffer) == NV_ENC_SUCCESS);
     assert(fn.nvEncDestroyInputBuffer(encoder, in_buf.inputBuffer) == NV_ENC_SUCCESS);
