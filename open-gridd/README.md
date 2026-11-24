@@ -24,7 +24,6 @@ flowchart LR
 - [**Method Call Graph**](docs/CALL_GRAPH.md) — Complete call-graph flowcharts and caller-to-callee matrix covering all `151` C functions across `src/*.c`.
 - [**C11 API Reference**](docs/API_REFERENCE.md) — Exhaustive reference covering all 15 header/source modules under `include/gridd/` and `src/`, every type, enum, struct, constant, macro, and all `92` public `gridd_*` functions.
 - [**Operations, Packaging & Testing Guide**](docs/OPERATIONS_AND_TESTING.md) — Dependencies, CMake/GCC/Clang builds, CPack (`.deb`/`.tar.gz`/`.rpm`) via `packaging/build-package.sh`, systemd deployment, `gridd.conf` keys, and the 3-tier verification pipeline.
-- [**Project Handoff & Decisions**](docs/PROJECT_HANDOFF.md) — Clean-room boundaries, architectural decisions, Ubuntu build environment notes, workspace skill overview, and verified baseline status.
 - [**Behavioral Specification**](docs/SPECIFICATION.md) — Clean-room protocol, ioctl ABI, configuration, cryptographic, and IPC specification.
 
 ## Repository Layout

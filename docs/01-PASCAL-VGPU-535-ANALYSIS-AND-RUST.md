@@ -6,7 +6,7 @@ NVIDIA dropped vGPU support for the Pascal architecture (`GP10x`, including the 
 
 ## 2. REA `6.9.0` + Ghidra `12.2` Analysis Evidence
 
-Every binary in the `535.309.01-vgpu-kvm` host package was analyzed with `rea@6.9.0` backed by `Ghidra 12.2` (`OpenJDK 25.0.5.0.3`, analysis profile `661a5dc61cb156c53a255bb2c8acfa7f458bed434347ff1ef84643624b29aa48`). Full JSON records are preserved in [evidence/vgpu-535/](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/evidence/vgpu-535/).
+Every binary in the `535.309.01-vgpu-kvm` host package was analyzed with `rea@6.9.0` backed by `Ghidra 12.2` (`OpenJDK 25.0.5.0.3`, analysis profile `661a5dc61cb156c53a255bb2c8acfa7f458bed434347ff1ef84643624b29aa48`). Full JSON records are preserved in [evidence/vgpu-535/](../evidence/vgpu-535/).
 
 | Artifact | Size (B) | SHA-256 (prefix) | Entropy | Decompiled Functions (`written/requested`, `failed`) | REA Evidence ID |
 | :--- | ---: | :--- | ---: | :--- | :--- |
@@ -62,7 +62,7 @@ Disassembling `vmiop_display_vmiop_plugin` (`0x590d80`, `168` bytes, header `0x0
 
 ## 4. Falcon Firmware Boundary in `535.309.01` vs `580.178.04`
 
-Executing the compiled `535.309.01` Physical HAL setters (`_nv003382rm` ACR, `_nv003443rm` PMU, `_nv003426rm` SEC2, `_nv003378rm` NVENC, `_nv003419rm` NVDEC, `_nv003313rm` FECS, `_nv003317rm` GPCCS) for `HAL_IMPL_GP104 = 0x1f` and extracting the blobs into [`firmware-blobs/gp104-vgpu-535/`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/firmware-blobs/gp104-vgpu-535/README.md) proved:
+Executing the compiled `535.309.01` Physical HAL setters (`_nv003382rm` ACR, `_nv003443rm` PMU, `_nv003426rm` SEC2, `_nv003378rm` NVENC, `_nv003419rm` NVDEC, `_nv003313rm` FECS, `_nv003317rm` GPCCS) for `HAL_IMPL_GP104 = 0x1f` and extracting the blobs into [`firmware-blobs/gp104-vgpu-535/`](../firmware-blobs/gp104-vgpu-535/README.md) proved:
 
 1. **No separate vGPU Falcon firmware exists on Pascal**: `acr_bl` (`02df5be8...`), `pmu_bl` (`f21f1cfb...`), `sec2_rtos` (`7b30debe...`, `221,440` B), `sec2_hs` (`0208fc41...`, `65,792` B), `nvenc_hs_scrub` (`c581260c...`), `fecs_ls_sig` (`bdb7d23c...`), `fecs_bl_code` (`a350776a...`), `gpccs_ls_sig` (`452d3267...`), `gpccs_bl_code` (`7f78dd89...`), and `gr_netlist` (`0cfca063...`, `90,552` B, `Jun 28 2019`, `32` sections) are **SHA-256 bit-for-bit identical** to `580.178.04`.
 2. **535-branch ucode builds**: `pmu_rtos` (`294,400` B, `c6fbbb4b...`, `Tue Mar 4 2025` build stamp), `nvenc0/1` (`230,912` B), and `nvdec` (`110,080` B) are 535-branch signed builds carrying valid `LsfSigInfo` footers (`fid=0` PMU, `fid=4` NVENC, `fid=5` NVDEC).
@@ -87,4 +87,4 @@ All 12 profiles in `vgpuConfig.xml` pack cleanly into `4,968`-byte `NVA081` desc
 | `GRID P4-4A` | 69 | NVS | `0x120a` | 4096 MiB | 3776 MiB | 320 MiB | 2 | 0 | 0 | 60 FPS |
 | `GRID P4-8A` | 70 | NVS | `0x120b` | 8192 MiB | 7616 MiB | 576 MiB | 1 | 0 | 0 | 60 FPS |
 
-The clean-room Rust reimplementation in [`nova-vgpu/`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/nova-vgpu/Cargo.toml) (`config.rs`, `vfio_ioctl.rs`, `rm_vgpu.rs`, `pci_cfg.rs`, `vrpc.rs`, `bar0_emul.rs`, `vmmu.rs`, `vmiop.rs`, and `nova_vgpu_tool.rs`) compiles cleanly with `rustc 1.93.1` on `192.168.1.15`, passes all `cargo test` unit/integration tests, parses the live `535.309.01` `vgpuConfig.xml`, validates the extracted `535.309.01` Falcon descriptors/LS signatures via [`nova-pascal/`](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/nova-pascal/Cargo.toml), and executes an end-to-end `GRID P4-2Q` mdev + BAR0 + `"VRPC"` + `CHIDMGR` + `VMMU` simulation without disturbing the VM's passed-through Tesla P4 (`0000:01:00.0`).
+The clean-room Rust reimplementation in [`nova-vgpu/`](../nova-vgpu/Cargo.toml) (`config.rs`, `vfio_ioctl.rs`, `rm_vgpu.rs`, `pci_cfg.rs`, `vrpc.rs`, `bar0_emul.rs`, `vmmu.rs`, `vmiop.rs`, and `nova_vgpu_tool.rs`) compiles cleanly with `rustc 1.93.1` on `192.168.1.15`, passes all `cargo test` unit/integration tests, parses the live `535.309.01` `vgpuConfig.xml`, validates the extracted `535.309.01` Falcon descriptors/LS signatures via `falcon_blobs.rs`, and executes an end-to-end `GRID P4-2Q` mdev + BAR0 + `"VRPC"` + `CHIDMGR` + `VMMU` simulation without disturbing the VM's passed-through Tesla P4 (`0000:01:00.0`).

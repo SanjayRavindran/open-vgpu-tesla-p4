@@ -21,7 +21,7 @@ A dedicated, **100% open-source** clean-room Rust + Linux kernel vGPU research s
 | [`open-nvml-smi/`](./open-nvml-smi/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-smi` CLI & `libopen-nvidia-ml.so` (`libnvidia-ml.so.1`) querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`). |
 | [`open-vgpu-plugin/`](./open-vgpu-plugin/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-nvidia-vgpu.so` (`VER_5_0`/`VER_2_0` `vmiop` mediator plugin) implementing all `47/47` cataloged live VRPC opcodes, guest PFN pinning, BAR1/USERD MMIO forwarding, exact VGX `0x23.0x05` `0x50` (`67,416` B) & `0x9c` (`31,536` B) static-info serializers, and hybrid interposer. |
 | [`open-vgpu-guest/`](./open-vgpu-guest/Makefile) | `MIT` / `GPL-2.0` | Clean-room guest BAR0 `0x8f000` `"VRPC"` client (`open_vgpu_guest_rpc.{h,c}`), `59`-VRPC zero-blob host↔guest loopback test, and `NVIDIA/open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC overlay (`overlay/open_vgpu_bar0_rpc.{h,c}`, `scripts/patch_open_535_guest_rm.py`, `scripts/build_open_535_guest_kmod.sh`). |
-| [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`) implementing all `10/10` ELF exports, `43/43` `NV_ENCODE_API_FUNCTION_LIST` slots, `45/45` `NvTool` API names, Pascal GP104 H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `/dev/nvidiactl` `NVC0B7_VIDEO_ENCODER` (`0xc0b7`) RM bridge. |
+| [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`, `libc.so.6` only) implementing **NVENC `13.0` (`0xd0`)** with `10/10` ELF exports, `43/43` function slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` (`0xc2b7`) + `NVC06F` + `NVC0B5` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `diff-hw-test` hardware parity suite. |
 | [`open-host-rm/`](./open-host-rm/Makefile) | `MIT` | Clean-room C `libopen-host-rm-gp104.so` Tier 2B host GP104 physical RM HAL slice (Category #1 signed Falcon WPR1/ACR LSF header builder for `8/8` Falcons, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, and `22`-profile Tesla P4 vGPU / 50-50 `GRID P4-4Q` `2×2048` CHID partitioner). |
 | [`open-gridd/`](./open-gridd/CMakeLists.txt) | `MIT` | Clean-room C11 + OpenSSL 3.x Linux vGPU / NLS licensing daemon (`open-gridd` -> `/usr/bin/nvidia-gridd`), replacing the `5.31 MiB` proprietary `nvidia-gridd` binary with RSA-2048 `.tok` JWT verification, PKCE auth, AES-256-GCM trusted store, `/dev/nvidiactl` RM license controls, and live FastAPI-DLS leasing verified on `vm-alma`. |
 | [`evidence/vgpu-535-rea610/`](./evidence/vgpu-535-rea610/rea_doctor.json) | Clean-room JSON | Machine-readable `rea@6.10.1` (`Ghidra 12.2`) static analysis, binary layout, native exports, release exposure, and decompilation summaries for `535.309.01` host & guest binaries. |
@@ -82,7 +82,7 @@ docker compose up -d
 Full side-by-side R620 comparison and root causes are in [`docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md`](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md):
 
 - **CUDA `12.1` / `12.2` & PTX `≤8.2` ceiling:** No CUDA `12.3`–`13.5` (R620) support; build or target CUDA `12.1`/`12.2`.
-- **NVENC API `12.1` ceiling:** Clients demanding NVENC `≥13.1` fail API version checks, whereas PixelFlux `2.2.3` dynamically negotiates `NVENC API 12.1` and encodes `H265 4:4:4 10-bit` and `H264 4:4:4 8-bit` in hardware.
+- **NVENC API `12.1` Solved (`open-nvenc` `13.0`):** Vendor `535.309.01` caps at NVENC `12.1`; installing clean-room [`open-nvenc/`](./open-nvenc/Makefile) upgrades Linux vGPU guests to **NVENC `13.0` (`0xd0`)** for `FFmpeg 8.x` and `Selkies` PixelFlux (`H.265 10-bit 4:4:4`, `H.264 4:2:0`/`4:4:4`, including non-16-aligned `1784x992`).
 - **Vulkan `1.3.242` ceiling:** No Vulkan `1.4.x` (`1.4.357` in R620).
 - **No R620 `nvidia-drm` `fbdev=1` or DRM syncobj timeline ioctls:** `535.309.01` `nvidia-drm` only supports `modeset=1`.
 - **Windows 11 `539.72` stays on `WDDM 3.1`:** No vGPU HAGS (`AlwaysOff`), no MCDM (compute-only driver model replacing TCC on newer GPUs; WDDM remains Microsoft's active display model), and no WSL2 GPU inside KVM. When changing vGPU profiles (e.g. `1Q -> 4Q`), run `pnputil /add-driver ... /install` once for the new Subsystem ID (`SUBSYS_120610DE`) and keep `Microsoft Basic Display Adapter` disabled.
@@ -105,7 +105,7 @@ make -C open-vgpu-mgr clean all test
 make -C open-nvml-smi clean all test
 make -C open-vgpu-plugin clean all test
 make -C open-vgpu-guest clean all test
-make -C open-nvenc clean all test
+make -C open-nvenc clean all test diff-test hw-test diff-hw-test
 make -C open-host-rm clean all test
 make -C open-gridd clean all test
 
@@ -118,7 +118,6 @@ python3 -m unittest discover -s tests -v
 - [02 — Guest vGPU Driver Analysis & Open-Source Kernel Mediator](./docs/02-GUEST-VGPU-DRIVER-ANALYSIS-AND-OPENSOURCE.md)
 - [03 — Why R620 (`620.70.06`) Dropped Pascal Kernel Support](./docs/03-GRID-620-PASCAL-SUPPORT-CHECK.md)
 - [04 — 2-VM 50/50 (`GRID P4-4Q`) Pure Wayland, Windows 11 WDDM & Selkies 10-bit 4:4:4 Guide](./docs/04-R620-WAYLAND-ON-R535-MULTI-VM-RDP.md)
-- [05 — Complete Project Retrospective & Open vGPU Pros/Cons](./docs/05-PROJECT-RETROSPECTIVE-AND-PROS-CONS.md)
 - [06 — Limitations, R620 vs. R535 Hybrid Comparison, RDP Feature Matrix & Live Verification Report](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md)
 - [07 — Reproducible Ubuntu KVM & Proxmox VE 8/9 Deployment Guide](./docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md)
 - [08 — Clean-Room Open-Source Host & Guest Daemons (`rea@6.10.1`)](./docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md)
@@ -127,13 +126,15 @@ python3 -m unittest discover -s tests -v
 - [11 — Unified Host & Guest Installation Guide](./docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md)
 - [12 — Open `vmiop` Plugin (`libopen-nvidia-vgpu.so`) & 47-Opcode Live VRPC Catalog](./docs/12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md)
 - [13 — Clean-Room Open Guest vGPU Kernel Driver (`open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC Overlay)](./docs/13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md)
+- [14 — Standalone Open NVENC `13.0` (`0xd0`) / `NVC2B7` (`0xc2b7`) GP104 Protocol](./docs/14-STANDALONE-NVENC-13-GP104-PHASE0-PROTOCOL.md)
+- [15 — Standalone Open NVENC `13.0` Usage, Installation & Parity Guide](./docs/15-STANDALONE-NVENC-13-GP104-USAGE.md)
 - [Disclaimer, Risk Notice & AI/LLM Usage Disclosure](./DISCLAIMER.md)
 
 ---
 
 ## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host/Guest Stack (`rea@6.10.1`)
 
-All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin, the guest BAR0 `"VRPC"` kernel driver overlay, the guest NVENC userspace wrapper, and the GP104 physical host RM HAL slice have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and implemented as clean-room open-source components:
+All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin, the guest BAR0 `"VRPC"` kernel driver overlay, the standalone guest NVENC `13.0` userspace encoder (`open-nvenc`), the Linux NLS/DLS licensing daemon (`open-gridd`), and the GP104 physical host RM HAL slice have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and implemented as clean-room open-source components:
 - **Clean-Room Open-Source Host & Guest Components**:
   - `nova-vgpu` (`open-nvidia-vgpud`): pure-Rust `/dev/nvidiactl` RM ioctl registrar (`NVA081` `0xa0810101` + `0xa0810109`).
   - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all `9/9` `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
@@ -142,13 +143,14 @@ All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin,
   - `open-nvml-smi` (`open-nvidia-smi` + `libopen-nvidia-ml.so`): clean-room C NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and active vGPU instances.
   - `open-vgpu-plugin` (`libopen-nvidia-vgpu.so`): clean-room C `vmiop` mediator plugin (`VER_5_0`/`VER_2_0`, `47/47` live VRPC opcodes, PFN pinning, BAR1/USERD MMIO forwarding, exact `0x50` `67,416` B & `0x9c` `31,536` B binary serializers).
   - `open-vgpu-guest` + `kmods/nova_vgpu_guest`: clean-room guest BAR0 `0x8f000` `"VRPC"` client (`59`-VRPC zero-blob host↔guest loopback), `nova_vgpu_guest.ko`, and `NVIDIA/open-gpu-kernel-modules@535.309.01` zero-blob guest `nvidia*.ko` (`Dual MIT/GPL`, `taint: OE`) overlay.
-  - `open-nvenc` (`libopen-nvidia-encode.so` / `libnvidia-encode.so.1`): clean-room NVENC 12.1 userspace library (`10/10` exports, `43/43` function slots, `45/45` `NvTool` names, GP104 H.264/HEVC 10-bit 4:4:4 + `/dev/nvidiactl` `0xc0b7` RM bridge).
+  - `open-nvenc` (`libopen-nvidia-encode.so` / `libnvidia-encode.so.1`): standalone clean-room **NVENC `13.0` (`0xd0`)** userspace library (`libc.so.6` only, `10/10` exports, `43/43` slots, `45/45` `NvTool` names, direct GP104 `NVC2B7` `0xc2b7` + `NVC06F` + `NVC0B5` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 + cached BL16 swizzle; `diff-hw-test` and live `brave-origin` verified).
   - `open-host-rm` (`libopen-host-rm-gp104.so`): clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, `22` vGPU types, 50/50 `GRID P4-4Q` split).
   - `open-gridd` (`nvidia-gridd`, C11 + OpenSSL 3.x): clean-room Linux NLS/DLS licensing daemon replacing vendor `nvidia-gridd` (`112 KiB` vs. `5.31 MiB`), live-verified via `systemd` against FastAPI-DLS (`https://192.168.1.24:443`) on AlmaLinux 10.3 `GRID P4-4Q` (`License Status : Licensed`).
   - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
 - **Unified Host & Guest Installation Scripts**:
   - `scripts/install_proxmox_vgpu_host.sh`: dedicated one-shot Proxmox VE 8/9 host configurator (optional `pve-no-subscription` repo, `proxmox-headers-$(uname -r)`, GRUB & `proxmox-boot-tool` IOMMU setup, VFIO/mdev/`nouveau` blacklist + `update-initramfs`, DKMS `535.309.01` + all 8 clean-room open-source host artifacts, native systemd FastAPI-DLS, and optional `--setup-vms fresh|import-qcow2`).
   - `scripts/provision_linux_vgpu_guest.sh`: universal multi-distro Linux vGPU guest provisioner supporting **RHEL (8/9/10)**, **AlmaLinux OS (8/9/10)**, **Rocky Linux / Oracle Linux / CentOS Stream / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04 LTS)**, and **Debian (11, 12, 13)**.
+  - `scripts/install_open_nvenc.sh`: builds, differential-tests, and deploys `libopen-nvidia-encode.so` (`NVENC 13.0`) on Linux guests or bare-metal hosts (with optional `--restore` rollback).
   - `scripts/install_open_vgpu.sh`: unified `--role host|guest-linux|guest-windows` installer for the 50/50 vGPU stack.
   - `scripts/install_open_580.sh`: unified `--role host|guest-linux` installer for the bare-metal / PCIe-passthrough `open-580-driver` stack.
   - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + all clean-room open host binaries installer for Ubuntu KVM & Proxmox VE 8/9.

@@ -1,4 +1,4 @@
-# Phase 0 Protocol Specification: GP104 Standalone NVENC (`NVC2B7`) & NVENC `13.0` (`0xd0`) ABI
+# Hardware Protocol Specification: GP104 Standalone NVENC (`NVC2B7`) & NVENC `13.0` (`0xd0`) ABI
 
 - **Target Hardware:** NVIDIA Tesla P4 (`GP104GL`, vGPU profile `nvidia-65` / `GRID P4-4Q`)
 - **Host/Guest Driver Reference:** `535.309.01` (`libnvidia-encode.so.535.309.01` + `libnvcuvid.so.535.309.01`)
@@ -224,17 +224,11 @@ Total descriptor allocation is `0xe000` bytes; `case_A` sets 72 non-zero 32-bit 
 
 ---
 
-## 6. NVENC `13.0` (`0xd0`) ABI Delta & Phase 1 Plan
+## 6. Implemented NVENC `13.0` (`0xd0`) ABI & Engine Architecture
 
-### 6.1 Required NVENC `13.0` ABI Updates (`open_nvenc.h` / `open_nvenc.c`)
+[`open-nvenc/`](../open-nvenc/Makefile) implements this hardware protocol end-to-end as `libopen-nvidia-encode.so` (`SONAME libnvidia-encode.so.1`) with zero external dependencies beyond `libc.so.6`:
 
-Currently [`open-nvenc/open_nvenc.h`](../open-nvenc/open_nvenc.h) targets NVENC `12.1` (`NVENCAPI_MAJOR_VERSION 12U`, `NVENCAPI_MINOR_VERSION 1U`, `0x7102000c -> 0xc1`). Disassembly of `Selkies` / `pixelflux` confirmed that NVENC `12.2+` / `13.0` requires:
-1. **`NVENCAPI_MAJOR_VERSION 13U`, `NVENCAPI_MINOR_VERSION 0U`** so `NvEncodeAPIGetMaxSupportedVersion(&ver)` returns `(13 << 4) | 0 = 0xd0` (`>= 0xc2` unblocks `420-10` and `444-10` in `pixelflux`).
-2. **Versioned Struct Support (`0xd` low nibble):** Accept `13.0` struct versions observed in `pixelflux` (`0x7728850d` `NV_ENCODE_API_FUNCTION_LIST`, `0x7001000d` `NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS`, `0x7004000d` `NV_ENC_INITIALIZE_PARAMS`, `0x7002000d` `NV_ENC_CONFIG`, etc.) via `open_nvenc_decode_struct_version`.
-3. **`NV_ENC_CONFIG_HEVC` 12.2+/13.0 Bit Depth Fields:** Replace NVENC `12.1`'s `pixelBitDepthMinus8 : 3` with distinct **`inputBitDepth`** and **`outputBitDepth`** bitfields matching the NVENC `13.0` SDK layout while remaining backwards-compatible when older struct versions are passed.
-
-### 6.2 Phase 1 Implementation Plan (`open-nvenc/open_nvenc.c`)
-
-1. Replace the placeholder `0xc0b7` class ID in `open_nvenc.c` with `NVC2B7_VIDEO_ENCODER` (`0xc2b7`), allocate the single NVENC channel + `NVC0B5` Copy Engine clearing channel, and allocate/DMA-map sysmem (`0x3e`) and vidmem (`0x40`) buffers directly via `/dev/nvidiactl` + `/dev/nvidia0`.
-2. Build standalone CPU-side `pic_setup` (`0xc2b70006`) + `0x80000095` builder parameterized by width/height, chroma format (`nv12` / `p010` / `yuv444` 8-bit & 10-bit), and `constqp` QP.
-3. Submit real `NVC06F` GPFIFO + `NVC2B7` (`0x0700..0x074c`, `0x0300 = 0`) commands via USERD `GPPut`, poll completion via host semaphore / status buffer `+0x04 == 2`, read `encoded_bits` from `+0x08`, emit spec-compliant H.265 `VPS`/`SPS`/`PPS` + Falcon IDR slice from `+0x100`, and verify offline + live container (`brave-origin` 10-bit 4:4:4) decode with `ffprobe` / `ffmpeg`.
+- **NVENC `13.0` (`0xd0`) Surface & Struct Compatibility ([`open_nvenc.h`](../open-nvenc/open_nvenc.h), [`open_nvenc.c`](../open-nvenc/open_nvenc.c)):** Exposes `0xd0` (`13.0`) while remaining backwards-compatible with NVENC `12.x` callers, exports all `10/10` ELF symbols, `43/43` `NV_ENCODE_API_FUNCTION_LIST` slots, `45/45` `NvTool` API names, `NV_ENC_CAPS[0..54]` + `>=55 -> NV_ENC_ERR_INVALID_PARAM`, aligned `NV_ENC_CONFIG_H264` (`+0x48` VUI, `+0xc0` chroma), and pinned CUDA host staging (`cuMemHostAlloc`/`cuMemFreeHost`).
+- **Direct GP104 `NVC2B7` / `NVC06F` / `NVC0B5` Channel & Cached BL16 Swizzle ([`open_nvenc_hw.c`](../open-nvenc/open_nvenc_hw.c)):** Allocates `NVC2B7_VIDEO_ENCODER` (`0xc2b7`) and `NVC06F` (`0xc06f`) over `/dev/nvidiactl` + `/dev/nvidia0` RM ioctls, pads/swizzles planar (`NV12`, `P010`, `IYUV`, `YV12`, `YUV444`, `YUV444_10BIT`) and RGB (`ARGB`/`ABGR`, `ARGB10`/`ABGR10`) inputs through cached 64B-aligned `stage_buf` Pascal `16Bx2` GOB routines (`bl16_store_gob_row64`), and enforces macroblock-aligned `dims_m1` (`w16 - 1`) for non-16-aligned dimensions (`1784x992`).
+- **Spec-Compliant Bitstream Framing ([`open_nvenc_hevc_hdr.c`](../open-nvenc/open_nvenc_hevc_hdr.c), [`open_nvenc_h264_hdr.c`](../open-nvenc/open_nvenc_h264_hdr.c)):** Generates framerate-aware H.265 `VPS`/`SPS`/`PPS`/`SEI` (`level=123` for `1784x992@60fps`, `general_tier_flag`) and H.264 `SPS`/`PPS`/`SEI` (`level=42` for `1784x992@60fps`) with BT.709 / BT.601 VUI parameters concatenated ahead of the Falcon hardware slice (`+0x100`).
+- **Usage, Verification & Benchmarks:** See [`docs/15-STANDALONE-NVENC-13-GP104-USAGE.md`](./15-STANDALONE-NVENC-13-GP104-USAGE.md) and [`open-nvenc/test_nvenc_diff_hw.c`](../open-nvenc/test_nvenc_diff_hw.c).

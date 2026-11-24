@@ -15,7 +15,7 @@ Use this track to partition a single Tesla P4 into **two concurrent `GRID P4-4Q`
 6. **`libopen-nvidia-ml.so`** (`C`, `open-nvml-smi/`) — Clean-room NVML shared library (`libnvidia-ml.so.1` SONAME)
 7. **`libopen-nvidia-vgpu.so`** (`C`, `open-vgpu-plugin/`) — Clean-room `vmiop` mediator plugin (`VER_5_0`/`VER_2_0`, `47/47` VRPCs, `0x50`/`0x9c` static info + hybrid interposer)
 8. **`open-vgpu-guest` & `nova_vgpu_guest.ko`** (`C`, `open-vgpu-guest/`, `kmods/nova_vgpu_guest/`) — Clean-room guest BAR0 `0x8f000` `"VRPC"` client & zero-blob `open-gpu-kernel-modules@535.309.01` `nvidia*.ko` overlay
-9. **`libopen-nvidia-encode.so`** (`C`, `open-nvenc/`) — Clean-room NVENC 12.1 userspace library (`libnvidia-encode.so.1` SONAME, `10/10` exports, `43/43` function slots, GP104 H.264/HEVC 10-bit 4:4:4)
+9. **`libopen-nvidia-encode.so`** (`C`, `open-nvenc/`) — Clean-room NVENC `13.0` (`0xd0`) userspace library (`libnvidia-encode.so.1` SONAME, `libc.so.6` only, `10/10` exports, `43/43` function slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4)
 10. **`libopen-host-rm-gp104.so`** (`C`, `open-host-rm/`) — Clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `22` vGPU profiles, 50/50 `GRID P4-4Q` split)
 11. **`open-gridd`** (`C11`, `open-gridd/`) — Clean-room Linux NLS/DLS licensing daemon (`/usr/bin/nvidia-gridd`, OpenSSL 3.x), replacing the `5.31 MiB` vendor `nvidia-gridd` binary and verified live on `vm-alma` against FastAPI-DLS (`https://192.168.1.24:443`)
 

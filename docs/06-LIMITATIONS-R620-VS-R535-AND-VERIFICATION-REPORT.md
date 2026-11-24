@@ -58,11 +58,11 @@ Verified live on `vm-alma` (`192.168.1.68`, `GRID P4-4Q`, `535.309.01` + R620 Wa
 - **Pure Wayland GNOME (`49.5`, `--no-x11`, zero host X11/Xwayland)** with R620's Wayland EGL/GBM platform bridge (`libnvidia-egl-wayland 1.1.20`, `libnvidia-egl-wayland2 1.0.2`, `libnvidia-egl-gbm 1.1.3`) overlaid onto `535.309.01`.
 - **Hardware-accelerated H.264 `AVC444`/`AVC420` RDP** on both Linux (`gnome-remote-desktop` CUDA + NVENC) and Windows 11 (`NVIDIA H.264 Encoder MFT`).
 - **Selkies + LinuxServer.io PixelFlux `10-bit` & `4:4:4` (`YUV444`) container hardware acceleration** via NVIDIA Container Toolkit (`nvidia-ctk` CDI v0.7.0), encoding `NVENC H265 4:4:4 10-bit` (`444-10`) and `NVENC H264 4:4:4 8-bit` (`444-8`).
-- **Windows 11 24H2 WDDM `3.1` (`539.72` WHQL)** with full **TechPowerUp GPU-Z 2.71.0**, **NVIDIA Control Panel `8.1.969.0`**, DirectX 11/12 (`FL 12_1`), OpenGL `4.6`, Vulkan `1.3`, OpenCL, DirectCompute, DirectML, CUDA `12.1`/`12.2`, NVENC `12.1`, and NVDEC (`H.264`, `HEVC` 8/10-bit, `VP8`, `VP9`, `MPEG2`, `VC1`, `JPEG`).
+- **Windows 11 24H2 WDDM `3.1` (`539.72` WHQL)** with full **TechPowerUp GPU-Z 2.71.0**, **NVIDIA Control Panel `8.1.969.0`**, DirectX 11/12 (`FL 12_1`), OpenGL `4.6`, Vulkan `1.3`, OpenCL, DirectCompute, DirectML, CUDA `12.1`/`12.2`, NVENC `12.1`, and NVDEC (`H.264`, `HEVC` 8/10/12-bit, `VP9` 8/10/12-bit, `MPEG-1/2/4`, `VC-1`, `MJPEG`).
 
 ### Known Limitations Compared to Native R620
 1. **CUDA `12.3`–`13.5` / PTX `8.3+`:** `535.309.01` / `539.72` cap at CUDA `12.2` (max PTX `8.2`). Target **CUDA `12.1` / `12.2`** (or downgrade PTX headers via `scripts/patch_grd_ptx_535.sh`).
-2. **NVENC API `12.1` vs `13.x`:** `535` exposes NVENC `12.1`. PixelFlux `2.2.3` and GRD work natively with NVENC `12.1`; standalone CLI builds compiled strictly against NVENC headers `≥13.1` require an NVENC `12.1`-compatible build.
+2. **NVENC API `12.1` Solved on Linux Guests (`open-nvenc` `13.0`):** Vendor `535.309.01` caps at NVENC `12.1` (`0xc1`). Installing clean-room `libopen-nvidia-encode.so` (`scripts/install_open_nvenc.sh`) upgrades Linux vGPU guests to **NVENC `13.0` (`0xd0`)** via GP104 `NVC2B7`, unblocking `FFmpeg 8.x` and `Selkies` PixelFlux `1784x992` `10-bit 4:4:4`.
 3. **Vulkan `1.3.242` vs `1.4.357`:** `535` userspace ICD is capped at Vulkan `1.3.242`.
 4. **Kernel `nvidia-drm` `fbdev=1` & DRM Syncobj Timeline Explicit Sync:** `535.309.01` `nvidia-drm` supports `modeset=1` and lacks R620's `drm_fbdev_*` and `drm_nvidia_semsurf_export_to_syncobj_point_params` ioctls.
 5. **Windows HAGS, MCDM, and WSL2 GPU in KVM:** `539.72` leaves HAGS as `AlwaysOff / Enabled: False`, does not support MCDM (which replaces legacy TCC compute-only mode on newer GPUs; WDDM remains Microsoft's active display model), and does not support WSL2 GPU passthrough inside a KVM Windows guest.
@@ -88,3 +88,17 @@ Verified live on `vm-alma` (`192.168.1.68`, `GRID P4-4Q`, `535.309.01` + R620 Wa
 | **Drive / Printer / Smartcard (`rdpdr`)** | Not implemented in GRD | Supported (`rdpdr` negotiated) |
 | **Camera & Media Redirection** | Not implemented in GRD | Supported (`RDCamera_Device_Enumerator`, `RDS::Video::Control/Data`, `Geometry` DVCs) |
 | **Companion Web Streaming (`10-bit 4:4:4`)** | **Selkies + PixelFlux `2.2.3`** (`https://192.168.1.68:3001`, **`NVENC H265 4:4:4 10-bit`** & **`NVENC H264 4:4:4 8-bit`**) | N/A |
+
+---
+
+## 5. Verified GP104 Codec, Maximum Resolution & Steady-State Framerate Matrix
+
+Measured live with `ffmpeg 8.0.1` on `GRID P4-8Q` (VM `1000`, `192.168.1.14`, driver `535.309.01` + clean-room `open-nvenc` `13.0` + `libnvcuvid.so.1`):
+
+| Engine & Codec | Reported Cap | Tested Resolutions & Formats | Measured Steady-State FPS (Single Session) | Notes |
+| :--- | :---: | :--- | :--- | :--- |
+| **NVENC H.264** (`open-nvenc`) | `4096x4096` | `1920x1080` `nv12`, `2560x1440` `nv12`, `3840x2160` `nv12`, `4096x2160` `nv12`, `1920x1080` `yuv444p`, `1784x992` `nv12` | `214 FPS` (1080p), `150 FPS` (1440p), **`61 FPS` (4K UHD)**, `58 FPS` (4K DCI) | `av1_nvenc` N/A on GP104 (`4112x2160` rejected) |
+| **NVENC HEVC** (`open-nvenc`) | `8192x8192` | `1920x1080` `nv12`/`p010le`, `2560x1440` `nv12`, `3840x2160` `nv12`/`p010le`, `7680x4320` `nv12`, **`8192x4320`** `nv12`, `1784x992` & `1080p`/`4K` `yuv444p10le` | `166 FPS` (1080p NV12), `153 FPS` (1080p P010), `112 FPS` (1440p NV12), `49 FPS` (4K NV12), `38 FPS` (4K P010), **`96 FPS` (`1784x992` 10-bit 4:4:4)**, `84 FPS` (1080p 10b444), `20 FPS` (4K 10b444), `11 FPS` (8K UHD), `10 FPS` (8K DCI) | GP104 has 2 NVENC engines; all streams decoded with 0 `ffmpeg` warnings |
+| **NVDEC H.264** (`h264_cuvid`) | `4096x4096` (8-bit) | `1920x1080`, `3840x2160`, **`4096x2160`** | **`512 FPS`** (1080p), **`132 FPS`** (4K UHD), `123 FPS` (4K DCI) | Zero-copy CUDA output; 10/12-bit H.264 N/A |
+| **NVDEC HEVC** (`hevc_cuvid`) | `8192x8192` (8/10/12-bit) | `1920x1080` (8b/10b), `3840x2160` (8b/10b), `7680x4320`, **`8192x4320`** | **`565 FPS`** (1080p 8b/10b), **`145 FPS`** (4K 8b/10b), **`35 FPS`** (8K UHD), `33 FPS` (8K DCI) | Zero-copy CUDA output + CUDA transcode verified |
+| **NVDEC VP9 / MPEG / MJPEG** | VP9 `8192x8192` (8/10/12-bit); MPEG-2 `4080x4080`; MJPEG `32768x16384` | `vp9_cuvid` (8b & 10b `p010le`), `mpeg1_cuvid`, `mpeg2_cuvid`, `mpeg4_cuvid`, `mjpeg_cuvid` | `720p` pass (`30` frames each, `vp9` -> `hevc_nvenc` CUDA transcode pass) | `vp8_cuvid` reports `supported: 0` in GP104 CUVID caps |

@@ -59,3 +59,14 @@ sudo systemctl restart docker
    - `encoders: {'h264': 'nvenc', 'h265': 'nvenc'}`
    - `fullcolor: ['h264', 'h265']`
    - `formats: {'h264': ['420-8', '444-8'], 'h265': ['420-8', '420-10', '444-8', '444-10']}`
+
+### 4. Standalone `open-nvenc` (`NVENC 13.0` / `0xd0`, `NVC2B7`) Integration
+1. Install or update `libopen-nvidia-encode.so` on the host/guest, regenerate CDI, and restart containers:
+   ```bash
+   sudo bash scripts/install_open_nvenc.sh
+   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+   sudo mkdir -p /var/run/cdi
+   sudo cp -f /etc/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml
+   sudo systemctl restart docker
+   ```
+2. Verify non-16-aligned dimensions (`1784x992` `YUV444_10BIT` / scroll-motion browser surfaces) render cleanly without stride/BL16 artifacts (see `open-nvenc-13-gp104` skill and run `make -C open-nvenc diff-hw-test`).

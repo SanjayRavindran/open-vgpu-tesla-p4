@@ -17,7 +17,7 @@
 
 ## 2. Disassembly & REA `6.9.0` / Ghidra `12.2` Proof
 
-Focused ELF slice `p4_guest_vgpu_535_slice.o` (`sha256: fc1f421400121784521cda52912dc6763b5fc271f634ad65ce0257f5cfd82e56`, `8 / 8` functions decompiled, `0` failed, REA evidence `ev_cc7bc0ea983f2082459867df11c104c4cab69d8f43c26cc959f82d8273f41f5b` in [evidence/vgpu-535/guest535_slice_decomp.json](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/evidence/vgpu-535/guest535_slice_decomp.json)):
+Focused ELF slice `p4_guest_vgpu_535_slice.o` (`sha256: fc1f421400121784521cda52912dc6763b5fc271f634ad65ce0257f5cfd82e56`, `8 / 8` functions decompiled, `0` failed, REA evidence `ev_cc7bc0ea983f2082459867df11c104c4cab69d8f43c26cc959f82d8273f41f5b` in [evidence/vgpu-535/guest535_slice_decomp.json](../evidence/vgpu-535/guest535_slice_decomp.json)):
 
 | Function (`535.309.01`) | Role in Guest RM (`nv-kernel.o_binary`) | Hardware Touchpoints Observed |
 | :--- | :--- | :--- |
@@ -35,19 +35,19 @@ Verified `VRPC` `func_id` table (`NOP = 0x00` .. `GET_ENGINE_UTILIZATION = 0x3b`
 
 ## 3. Open-Source Deliverables Built & Verified
 
-### 3.1 Clean-Room Linux `7.0` Guest Kernel Driver ([kmods/nova_vgpu_guest/](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_guest/nova_vgpu_guest.c))
-- GPLv2 PCI kernel module (`nova_vgpu_guest.ko`, [Makefile](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_guest/Makefile), [nova_vgpu_guest.h](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_guest/nova_vgpu_guest.h), [nova_vgpu_guest.c](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_guest/nova_vgpu_guest.c)).
+### 3.1 Clean-Room Linux `7.0` Guest Kernel Driver ([kmods/nova_vgpu_guest/](../kmods/nova_vgpu_guest/nova_vgpu_guest.c))
+- GPLv2 PCI kernel module (`nova_vgpu_guest.ko`, [Makefile](../kmods/nova_vgpu_guest/Makefile), [nova_vgpu_guest.h](../kmods/nova_vgpu_guest/nova_vgpu_guest.h), [nova_vgpu_guest.c](../kmods/nova_vgpu_guest/nova_vgpu_guest.c)).
 - **Safety guard**: Probes `10de:1bb3` only when `NV_VGPU_CONFIG` (`0x8f020`) bit `0` is `1` (`allow_baremetal_probe=0` default), refusing to bind onto bare-metal GPUs.
 - Allocates `4 KiB` DMA-coherent `SEND_RING`, `RECV_RING`, `EVENT_RING`, and `"VRPC"` staging pages via `dmam_alloc_coherent`, programs `0x8f000..0x8f03c`, handles MSI/INTx `0x8f028` (`W1C 0x3c0`), exposes `/dev/nova-vgpu-guest%d` (`GET_INFO`, `VRPC`, `READ_REG` ioctls + BAR1 write-combine `mmap`), and **compiled cleanly with zero warnings against `Linux 7.0.0-43-generic`** on `192.168.1.15`.
 
-### 3.2 Clean-Room Rust Guest Driver & Host<->Guest Loopback ([nova-vgpu/src/guest.rs](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/nova-vgpu/src/guest.rs))
+### 3.2 Clean-Room Rust Guest Driver & Host<->Guest Loopback ([nova-vgpu/src/guest.rs](../nova-vgpu/src/guest.rs))
 - Implements `GuestVgpuTransport`, `NovaGuestDriver` (`probe_and_init`, `call_vrpc`, `set_guest_system_info`, `get_static_info`, `shutdown`), ring PTE encoders (`encode_ring_pte_lo`, `encode_ring_pte_hi`, `decode_ring_pte`), and `HostLoopbackTransport` wiring `NovaGuestDriver` directly to `PascalVgpuInstance` (`VMMU` GFN pinning + `PascalBar0Emulator` + `VrpcEngine`).
-- CLI runner [nova_vgpu_guest_tool.rs](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/nova-vgpu/src/bin/nova_vgpu_guest_tool.rs) executes an end-to-end `GRID P4-2Q` Guest <-> Host `"VRPC"` bring-up (`SetGuestSystemInfo=0`, `GetStaticInfo535=0 (fb=0x74000000)`, `AllocRoot=0`, `AllocDevice535=0`, `AllocChannelDma=0`) with zero Falcon or proprietary binaries.
+- CLI runner [nova_vgpu_guest_tool.rs](../nova-vgpu/src/bin/nova_vgpu_guest_tool.rs) executes an end-to-end `GRID P4-2Q` Guest <-> Host `"VRPC"` bring-up (`SetGuestSystemInfo=0`, `GetStaticInfo535=0 (fb=0x74000000)`, `AllocRoot=0`, `AllocDevice535=0`, `AllocChannelDma=0`) with zero Falcon or proprietary binaries.
 
 ### 3.3 Live QEMU/KVM `vfio-mdev` Hardware Verification on `192.168.1.63`
 To validate the guest kernel driver inside a real virtual machine backed by Linux `vfio-mdev` on the bare-metal Tesla P4 host (`192.168.1.63`, `h61`, `Linux 7.0.0-43-generic`, `0000:01:00.0` `10de:1bb3`):
-- Created the GPLv2 host `vfio-mdev` mediator module [kmods/nova_vgpu_mdev/nova_vgpu_mdev.c](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) ([Makefile](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_mdev/Makefile)) implementing Linux `7.0` `mdev_register_parent`, `vfio_register_emulated_iommu_dev`, `get_region_info_caps`, MSI/INTx `eventfd_signal`, `vmalloc_user` `16 MiB` BAR1 `mmap`, and guest DMA ring transfers via `vfio_dma_rw()`.
-- Instantiated mdev `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` under `/sys/devices/platform/nova_vgpu_parent/mdev_supported_types/platform-nvidia-64/create` (`GRID P4-2Q`, IOMMU group `10`) and booted `qemu-system-x86_64` (`10.2.1`, `-enable-kvm -cpu host -m 1024M -device vfio-pci,sysfsdev=/sys/bus/mdev/devices/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`) with a `Linux 7.0.0-43-generic` + initramfs guest image running [test_guest_ioctl.c](file:///c:/Users/Sanjay/Documents/AI%20Projects/p4/kmods/nova_vgpu_guest/test_guest_ioctl.c).
+- Created the GPLv2 host `vfio-mdev` mediator module [kmods/nova_vgpu_mdev/nova_vgpu_mdev.c](../kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) ([Makefile](../kmods/nova_vgpu_mdev/Makefile)) implementing Linux `7.0` `mdev_register_parent`, `vfio_register_emulated_iommu_dev`, `get_region_info_caps`, MSI/INTx `eventfd_signal`, `vmalloc_user` `16 MiB` BAR1 `mmap`, and guest DMA ring transfers via `vfio_dma_rw()`.
+- Instantiated mdev `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` under `/sys/devices/platform/nova_vgpu_parent/mdev_supported_types/platform-nvidia-64/create` (`GRID P4-2Q`, IOMMU group `10`) and booted `qemu-system-x86_64` (`10.2.1`, `-enable-kvm -cpu host -m 1024M -device vfio-pci,sysfsdev=/sys/bus/mdev/devices/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`) with a `Linux 7.0.0-43-generic` + initramfs guest image running [test_guest_ioctl.c](../kmods/nova_vgpu_guest/test_guest_ioctl.c).
 - **Observed Live Guest Output**:
   - Guest PCI enumeration discovered `0000:00:04.0: 0x10de:0x1bb3 sub=0x1205`.
   - `nova_vgpu_guest.ko` attached (`BOOT0=0x134000a1 FB=1856 MiB (zero Falcon blobs loaded)`) and created `/dev/nova-vgpu-guest0`.

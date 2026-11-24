@@ -11,7 +11,7 @@ description: >-
 # Windows 11 24H2 WDDM 3.1, GPU-Z, NVIDIA Control Panel & RDP Operations (`192.168.1.65`)
 
 ## Remote Management via WinRM from Host (`192.168.1.24`)
-Use `/home/zero/wenv/bin/python` with `pywinrm` (`transport='ntlm'`, `http://192.168.1.65:5985/wsman`, user `zero`, password `sanjay`).
+Use `/home/zero/wenv/bin/python` with `pywinrm` (`transport='ntlm'`, `http://192.168.1.65:5985/wsman`, user `zero`, password `<YOUR_WINRM_PASSWORD>`).
 
 ## Procedures & Troubleshooting
 

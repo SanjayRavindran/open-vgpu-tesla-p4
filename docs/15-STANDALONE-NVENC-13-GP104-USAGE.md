@@ -81,3 +81,17 @@ docker restart brave-origin
 ```
 
 Verify inside the container that `NvEncodeAPIGetMaxSupportedVersion` reports `0xd0` (`13.0`) and that PixelFlux encodes 10-bit 4:4:4 HEVC on hardware (`NvEncodeAPICreateInstance` + `YUV444_10BIT`).
+
+## Verified Differential Hardware Benchmarks & Peak GP104 Throughput
+
+Measured live on GP104 (`GRID P4-4Q` / `GRID P4-8Q`, `535.309.01` vs. clean-room `open-nvenc` `13.0`):
+
+1. **Bug-for-Bug Differential Suite (`make diff-hw-test` vs. `535.309.01` & `620.70.06` `0xd1`):**
+   - `HEVC 10-bit 4:4:4` (`1784x992`, PixelFlux PaintOver + `InvalidateRefFrames`): VENDOR `156.4–181.5 FPS`, `PSNR=44.42 dB (min=41.82)` vs. **OPEN `98.2–108.3 FPS`, `PSNR=47.09 dB (min=43.71)`, `SSIM=0.9925`, `level=123 bt709/tv`, `0` warnings**.
+   - `HEVC ARGB 8-bit 4:4:4` (`1784x992`): VENDOR `145.2–161.5 FPS`, `PSNR=39.09 dB` vs. **OPEN `72.7–76.7 FPS`, `PSNR=42.76 dB`, `level=123`, `0` warnings**.
+   - `H.264 NV12` (`1784x992`): VENDOR `231.2–269.1 FPS`, `PSNR=46.02 dB` vs. **OPEN `276.3–312.4 FPS`, `PSNR=47.73 dB`, `level=42`, `0` warnings**.
+   - `H.264 YUV444` (`1784x992`): VENDOR `150.5–167.4 FPS`, `PSNR=44.68 dB` vs. **OPEN `174.8–184.2 FPS`, `PSNR=47.12 dB`, `level=42`, `0` warnings**.
+   - `HEVC NV12 720p` (`VBR -> CBR` live reconfigure): VENDOR `360.5–398.1 FPS`, `PSNR=31.79 dB` vs. **OPEN `458.0–503.1 FPS`, `PSNR=50.05 dB`, `0` warnings**.
+2. **Steady-State `ffmpeg 8.0.1` Encode Limits (`GRID P4-8Q`, `-preset p3 -tune ull`):**
+   - **H.264:** up to `4096x2160` (`214 FPS` 1080p, `150 FPS` 1440p, `61 FPS` 4K UHD, `58 FPS` 4K DCI).
+   - **HEVC:** up to `8192x4320` (`166 FPS` 1080p NV12, `153 FPS` 1080p P010, `112 FPS` 1440p NV12, `49 FPS` 4K NV12, `38 FPS` 4K P010, `96 FPS` `1784x992` 10-bit 4:4:4, `84 FPS` 1080p 10-bit 4:4:4, `20 FPS` 4K 10-bit 4:4:4, `11 FPS` 8K UHD, `10 FPS` 8K DCI).

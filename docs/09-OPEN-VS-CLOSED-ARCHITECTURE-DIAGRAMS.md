@@ -106,8 +106,8 @@ flowchart TB
 
     subgraph AL_USR["Hybrid Userspace Driver Stack (R620 Wayland + R535 Core)"]
         EGL_WL["Open R620 Shims: libnvidia-egl-wayland, wayland2, gbm"]:::oss
-        NVENC["libopen-nvidia-encode.so (Clean-Room C NVENC 12.1 -> 0xc0b7 RM)"]:::ours
-        NV_GL["Closed R535 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda"]:::closed
+        NVENC["libopen-nvidia-encode.so (Clean-Room C NVENC 13.0 -> NVC2B7/NVC06F RM, libc only)"]:::ours
+        NV_GL["Closed R535 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda, libnvcuvid"]:::closed
         GRIDD["open-gridd (Clean-Room C11 NLS/DLS Daemon -> FastAPI-DLS :443)"]:::ours
         AL_PROV["provision_linux_vgpu_guest.sh (Open setup automation)"]:::ours
     end
@@ -220,7 +220,7 @@ sequenceDiagram
 | `libopen-nvidia-vgpu.so` | Host Userspace | **Ours** | Open (C, `VER_5_0`/`VER_2_0` plugin) | Clean-room GP104 `vmiop` mediator (`47/47` VRPCs, PFN pinning, BAR1/USERD MMIO forwarding, `0x50` `67,416` B & `0x9c` `31,536` B serializers + hybrid interposer) |
 | `libopen-host-rm-gp104.so` | Host RM HAL Slice | **Ours** | Open (C, `open-host-rm/`) | Category #1 signed Falcon WPR1/ACR LSF header builder (`8/8` Falcons), `NV_PMC_ENABLE`/BAR1/BAR2 bringup, `22` vGPU profiles, 50/50 `GRID P4-4Q` (`2×2048` CHID) split |
 | `open-vgpu-guest` / `nova_vgpu_guest.ko` | Linux Guest Kernel | **Ours** | Open (C, `Dual MIT/GPL`) | BAR0 `0x8f000` `"VRPC"` guest transport (`GP_IN_RING` `0x80b`) + zero-blob `open-gpu-kernel-modules@535.309.01` `nvidia*.ko` overlay |
-| `libopen-nvidia-encode.so` | Linux Guest Userspace | **Ours** | Open (C, `libnvidia-encode.so.1`) | Clean-room NVENC 12.1 userspace library (`10/10` exports, `43/43` function slots, `45/45` `NvTool` API names, GP104 H.264/HEVC 10-bit 4:4:4 + `0xc0b7` RM bridge) |
+| `libopen-nvidia-encode.so` | Linux Guest Userspace | **Ours** | Open (C, `libnvidia-encode.so.1`) | Clean-room NVENC `13.0` (`0xd0`) library (`libc.so.6` only, `10/10` exports, `43/43` slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` `0xc2b7` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 + cached BL16 swizzle) |
 | `open-gridd` | Linux Guest Userspace | **Ours** | Open (C11, OpenSSL 3.x) | Clean-room Linux NLS/DLS licensing daemon (`/usr/bin/nvidia-gridd`): RSA-2048 JWT `.tok` check, PKCE auth, AES-256-GCM store, RM `0x20808161`/`0x20800187` status, live FastAPI-DLS verified |
 | `FastAPI-DLS` | Host Service | Upstream Open | Open (Python/Docker/systemd) | Issues TLS licensing tokens & leases (`192.168.1.24:443`) |
 | `nvidia-vgpu-vfio.ko` | Host Kernel | NVIDIA / DKMS | Open (MIT C) | KVM/VFIO `mdev` lifecycle and BAR0/VRPC trap forwarding |
@@ -228,3 +228,32 @@ sequenceDiagram
 | `libnvidia-vgpu.so.535.309.01` | Host Userspace | NVIDIA Proprietary | Closed `.so` plugin (optional backend) | Retained behind `libopen-nvidia-vgpu.so` in hybrid mode for live 2-VM VRPC/DRM parity |
 | AlmaLinux `535` + `620` Stack | Linux Guest | Hybrid | Open R620 EGL/DRM + Closed R535 | Pure Wayland GNOME 49.5 + GTK4 (`ngl`) + CUDA PTX patched RDP + Selkies |
 | Windows 11 `539.72 WHQL` Stack | Windows Guest | Closed + Open scripts | Closed WDDM + Open `.ps1`/XML | WDDM 3.1 DX12/CUDA/NVENC + policy-fixed RDP `:3389` without `0x200d` |
+
+---
+
+## 5. Standalone `open-nvenc` (`NVENC 13.0` / `NVC2B7`) Hardware Encode Pipeline
+
+```mermaid
+flowchart LR
+    classDef ours fill:#dcfce7,stroke:#15803d,stroke-width:2px,color:#14532d
+    classDef oss fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#1e3a8a
+    classDef closed fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#7f1d1d
+    classDef hw fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
+
+    CALLER["FFmpeg 8.x / Selkies PixelFlux / GRD"]:::oss
+    ABI["libopen-nvidia-encode.so ABI (0xd0 13.0, 43 slots, 45 NvTool)"]:::ours
+    CUDA["Optional dlopen libcuda.so.1 (CUDADEVICEPTR / CUDAARRAY -> cuMemHostAlloc)"]:::closed
+    SWIZZLE["Cached 64B Stage Buffer: Edge Pad + ARGB/YUV -> Pascal 16Bx2 BL16 Swizzle"]:::ours
+    RM["/dev/nvidiactl + /dev/nvidia0 RM (0x41/0x80/0x2080, NVC06F GPFIFO, NVC2B7 0xc2b7)"]:::ours
+    FALCON["GP104 Signed NVENC Falcon (pic_setup 0xc2b70006 -> Slice +0x100, Semaphore)"]:::hw
+    HDR["CPU Bitstream Assembler (H.265 VPS/SPS/PPS/SEI | H.264 SPS/PPS/SEI + Slice)"]:::ours
+
+    CALLER -- "NvEncOpenEncodeSessionEx / EncodePicture" --> ABI
+    ABI -. "CUDA surface present" .-> CUDA
+    CUDA -. "Pinned staging copy" .-> SWIZZLE
+    ABI -- "Host linear buffer" --> SWIZZLE
+    SWIZZLE -- "Sequential write to WC input_buf + NVC06F kick" --> RM
+    RM -- "GPFIFO pushbuffer + 0x0700..0x074c + 0x0300 exec" --> FALCON
+    FALCON -- "encoded_bits status +0x08" --> HDR
+    HDR -- "NvEncLockBitstream elementary stream" --> CALLER
+```
