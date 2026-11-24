@@ -19,6 +19,8 @@
  */
 
 #include "open_nvenc.h"
+#include "open_nvenc_hevc_hdr.h"
+#include "open_nvenc_h264_hdr.h"
 
 #include <assert.h>
 #include <dlfcn.h>
@@ -176,8 +178,77 @@ static void test_gp104_hevc_10bit_444_encode_session(void)
     assert(fn.nvEncGetEncodeCaps(encoder, NV_ENC_CODEC_HEVC_GUID, &cp, &cap_val) == NV_ENC_SUCCESS);
     assert(cap_val == 1);
 
-    /* Query preset config and initialize 10-bit 4:4:4 HEVC encoder */
+    for (int oc = 55; oc <= 59; oc++) {
+        cp.capsToQuery = (NV_ENC_CAPS)oc;
+        assert(fn.nvEncGetEncodeCaps(encoder, NV_ENC_CODEC_HEVC_GUID, &cp, &cap_val) == NV_ENC_ERR_INVALID_PARAM);
+        assert(fn.nvEncGetEncodeCaps(encoder, NV_ENC_CODEC_H264_GUID, &cp, &cap_val) == NV_ENC_ERR_INVALID_PARAM);
+    }
+
+    /* Check tuning preset parity + level/VUI header helpers */
     NV_ENC_PRESET_CONFIG preset_cfg;
+    memset(&preset_cfg, 0, sizeof(preset_cfg));
+    preset_cfg.version           = NV_ENC_PRESET_CONFIG_VER;
+    preset_cfg.presetCfg.version = NV_ENC_CONFIG_VER;
+    assert(fn.nvEncGetEncodePresetConfigEx(
+               encoder, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P4_GUID,
+               NV_ENC_TUNING_INFO_HIGH_QUALITY, &preset_cfg) == NV_ENC_SUCCESS);
+    assert(preset_cfg.presetCfg.gopLength == 250U);
+    assert(preset_cfg.presetCfg.rcParams.rateControlMode == NV_ENC_PARAMS_RC_VBR);
+
+    memset(&preset_cfg, 0, sizeof(preset_cfg));
+    preset_cfg.version           = NV_ENC_PRESET_CONFIG_VER;
+    preset_cfg.presetCfg.version = NV_ENC_CONFIG_VER;
+    assert(fn.nvEncGetEncodePresetConfigEx(
+               encoder, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P4_GUID,
+               NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset_cfg) == NV_ENC_SUCCESS);
+    assert(preset_cfg.presetCfg.gopLength == 0xffffffffU);
+    assert(preset_cfg.presetCfg.rcParams.rateControlMode == NV_ENC_PARAMS_RC_CBR);
+    assert(preset_cfg.presetCfg.rcParams.multiPass == 1U);
+
+    memset(&preset_cfg, 0, sizeof(preset_cfg));
+    preset_cfg.version           = NV_ENC_PRESET_CONFIG_VER;
+    preset_cfg.presetCfg.version = NV_ENC_CONFIG_VER;
+    assert(fn.nvEncGetEncodePresetConfigEx(
+               encoder, NV_ENC_CODEC_HEVC_GUID, NV_ENC_PRESET_P4_GUID,
+               NV_ENC_TUNING_INFO_LOSSLESS, &preset_cfg) == NV_ENC_SUCCESS);
+    assert(preset_cfg.presetCfg.rcParams.rateControlMode == NV_ENC_PARAMS_RC_CONSTQP);
+
+    assert(open_nvenc_h264_compute_level_idc_fps(1784U, 992U, 60U, 1U) == 42U);
+    {
+        uint8_t hdr_buf[256];
+        open_nvenc_hevc_hdr_params_t ep;
+        memset(&ep, 0, sizeof(ep));
+        ep.width = 1784U; ep.height = 992U; ep.chroma_format_idc = 3U; ep.bit_depth = 10U;
+        ep.fps_num = 60U; ep.fps_den = 1U;
+        ep.video_signal_type_present = 1U; ep.video_format = 5U; ep.video_full_range = 0U;
+        ep.colour_desc_present = 1U; ep.colour_primaries = 1U;
+        ep.transfer_characteristics = 1U; ep.matrix_coeffs = 1U;
+        size_t hn = open_nvenc_hevc_write_headers_ex(hdr_buf, sizeof(hdr_buf), &ep);
+        assert(hn > 40U);
+        assert(hdr_buf[0] == 0x00 && hdr_buf[1] == 0x00 && hdr_buf[2] == 0x00 && hdr_buf[3] == 0x01);
+        /* Strip emulation-prevention 0x03 from VPS NAL (bytes 6..hn until next startcode) */
+        uint8_t vps_rbsp[64];
+        size_t vp = 0U;
+        for (size_t i = 6U; i + 2U < hn && !(hdr_buf[i] == 0U && hdr_buf[i+1] == 0U && hdr_buf[i+2] == 1U) && vp < sizeof(vps_rbsp); i++) {
+            if (i >= 8U && hdr_buf[i] == 0x03U && hdr_buf[i-1] == 0x00U && hdr_buf[i-2] == 0x00U) {
+                continue;
+            }
+            vps_rbsp[vp++] = hdr_buf[i];
+        }
+        assert(vp > 15U && vps_rbsp[15] == 123U); /* Level 4.1 for 1784x992 @ 60fps */
+        ep.fps_num = 30U;
+        hn = open_nvenc_hevc_write_headers_ex(hdr_buf, sizeof(hdr_buf), &ep);
+        vp = 0U;
+        for (size_t i = 6U; i + 2U < hn && !(hdr_buf[i] == 0U && hdr_buf[i+1] == 0U && hdr_buf[i+2] == 1U) && vp < sizeof(vps_rbsp); i++) {
+            if (i >= 8U && hdr_buf[i] == 0x03U && hdr_buf[i-1] == 0x00U && hdr_buf[i-2] == 0x00U) {
+                continue;
+            }
+            vps_rbsp[vp++] = hdr_buf[i];
+        }
+        assert(vp > 15U && vps_rbsp[15] == 120U); /* Level 4.0 for 1784x992 @ 30fps */
+    }
+
+    /* Query preset config and initialize 10-bit 4:4:4 HEVC encoder */
     memset(&preset_cfg, 0, sizeof(preset_cfg));
     preset_cfg.version           = NV_ENC_PRESET_CONFIG_VER;
     preset_cfg.presetCfg.version = NV_ENC_CONFIG_VER;

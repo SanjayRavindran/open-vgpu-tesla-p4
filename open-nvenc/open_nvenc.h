@@ -216,7 +216,7 @@ typedef enum _NV_ENC_CAPS {
     NV_ENC_CAPS_SUPPORT_ALPHA_LAYER_ENCODING     = 48,
     NV_ENC_CAPS_NUM_ENCODER_ENGINES              = 49,
     NV_ENC_CAPS_SINGLE_SLICE_INTRA_REFRESH       = 50,
-    NV_ENC_CAPS_EXPOSED_COUNT                    = 51
+    NV_ENC_CAPS_EXPOSED_COUNT                    = 55
 } NV_ENC_CAPS;
 
 typedef enum _NV_ENC_TUNING_INFO {
@@ -286,6 +286,28 @@ typedef struct _NV_ENC_CAPS_PARAM {
     uint32_t    reserved[62];
 } NV_ENC_CAPS_PARAM;
 
+typedef struct _NV_ENC_CONFIG_HEVC_VUI_PARAMETERS {
+    uint32_t overscanInfoPresentFlag;
+    uint32_t overscanInfo;
+    uint32_t videoSignalTypePresentFlag;
+    uint32_t videoFormat;
+    uint32_t videoFullRangeFlag;
+    uint32_t colourDescriptionPresentFlag;
+    uint32_t colourPrimaries;
+    uint32_t transferCharacteristics;
+    uint32_t colourMatrix;
+    uint32_t chromaSampleLocationFlag;
+    uint32_t chromaSampleLocationTop;
+    uint32_t chromaSampleLocationBot;
+    uint32_t bitstreamRestrictionFlag;
+    uint32_t timingInfoPresentFlag;
+    uint32_t numUnitInTicks;
+    uint32_t timeScale;
+    uint32_t reserved[12];
+} NV_ENC_CONFIG_HEVC_VUI_PARAMETERS;
+
+typedef NV_ENC_CONFIG_HEVC_VUI_PARAMETERS NV_ENC_CONFIG_H264_VUI_PARAMETERS;
+
 typedef struct _NV_ENC_CONFIG_H264 {
     uint32_t enableStereoMVC : 1;
     uint32_t hierarchicalPFrames : 1;
@@ -322,30 +344,13 @@ typedef struct _NV_ENC_CONFIG_H264 {
     uint32_t maxNumRefFrames;
     uint32_t sliceMode;
     uint32_t sliceModeData;
-    uint32_t chromaFormatIDC; /* 1 = 4:2:0, 3 = 4:4:4 (YUV444) */
-    uint32_t maxTemporalLayers;
-    uint32_t reserved1[260];
+    NV_ENC_CONFIG_H264_VUI_PARAMETERS h264VUIParameters; /* +0x48 */
+    uint32_t ltrNumFrames;                                /* +0xb8 */
+    uint32_t ltrTrustMode;                                /* +0xbc */
+    uint32_t chromaFormatIDC; /* +0xc0: 1 = 4:2:0, 3 = 4:4:4 (YUV444) */
+    uint32_t maxTemporalLayers;                           /* +0xc4 */
+    uint32_t reserved1[230];
 } NV_ENC_CONFIG_H264;
-
-typedef struct _NV_ENC_CONFIG_HEVC_VUI_PARAMETERS {
-    uint32_t overscanInfoPresentFlag;
-    uint32_t overscanInfo;
-    uint32_t videoSignalTypePresentFlag;
-    uint32_t videoFormat;
-    uint32_t videoFullRangeFlag;
-    uint32_t colourDescriptionPresentFlag;
-    uint32_t colourPrimaries;
-    uint32_t transferCharacteristics;
-    uint32_t colourMatrix;
-    uint32_t chromaSampleLocationFlag;
-    uint32_t chromaSampleLocationTop;
-    uint32_t chromaSampleLocationBot;
-    uint32_t bitstreamRestrictionFlag;
-    uint32_t timingInfoPresentFlag;
-    uint32_t numUnitInTicks;
-    uint32_t timeScale;
-    uint32_t reserved[12];
-} NV_ENC_CONFIG_HEVC_VUI_PARAMETERS;
 
 /*
  * Exact upstream x86_64 NVENC 13.0 layout:

@@ -26,6 +26,8 @@
 
 _Static_assert(sizeof(NV_ENC_RC_PARAMS) == 128U, "NV_ENC_RC_PARAMS ABI size mismatch");
 _Static_assert(sizeof(NV_ENC_CONFIG_HEVC_VUI_PARAMETERS) == 112U, "NV_ENC_CONFIG_HEVC_VUI ABI size mismatch");
+_Static_assert(offsetof(NV_ENC_CONFIG_H264, h264VUIParameters) == 0x48U, "h264VUIParameters offset mismatch");
+_Static_assert(offsetof(NV_ENC_CONFIG_H264, chromaFormatIDC) == 0xc0U, "h264 chromaFormatIDC offset mismatch");
 _Static_assert(sizeof(NV_ENC_CONFIG_HEVC) == 1560U, "NV_ENC_CONFIG_HEVC ABI size mismatch");
 _Static_assert(offsetof(NV_ENC_CONFIG_HEVC, outputBitDepth) == 200U, "outputBitDepth offset mismatch");
 _Static_assert(offsetof(NV_ENC_CONFIG_HEVC, inputBitDepth) == 204U, "inputBitDepth offset mismatch");
@@ -35,6 +37,7 @@ _Static_assert(offsetof(NV_ENC_CONFIG, encodeCodecConfig) == 168U, "encodeCodecC
 _Static_assert(sizeof(NV_ENC_PRESET_CONFIG) == 5128U, "NV_ENC_PRESET_CONFIG ABI size mismatch");
 _Static_assert(sizeof(NV_ENC_INITIALIZE_PARAMS) == 1800U, "NV_ENC_INITIALIZE_PARAMS ABI size mismatch");
 _Static_assert(offsetof(NV_ENC_INITIALIZE_PARAMS, encodeConfig) == 88U, "encodeConfig offset mismatch");
+_Static_assert(offsetof(NV_ENC_RECONFIGURE_PARAMS, reInitEncodeParams) == 8U, "reInitEncodeParams offset mismatch");
 _Static_assert(sizeof(NV_ENC_PIC_PARAMS) == 3360U, "NV_ENC_PIC_PARAMS ABI size mismatch");
 _Static_assert(offsetof(NV_ENC_PIC_PARAMS, inputBuffer) == 40U, "inputBuffer offset mismatch");
 _Static_assert(offsetof(NV_ENC_PIC_PARAMS, outputBitstream) == 48U, "outputBitstream offset mismatch");
@@ -197,6 +200,7 @@ typedef struct {
     size_t                   cuda_host_size;
     int                      is_cuda_devptr;
     int                      is_cuda_array;
+    int                      cuda_pinned;
 } open_nvenc_reg_res_t;
 
 #define OPEN_NVENC_SESSION_MAGIC   0x4e564543U /* "NVEC" */
@@ -523,6 +527,10 @@ static NVENCSTATUS impl_nvEncGetEncodeCaps(
     if (!is_h264 && !is_hevc) {
         return NV_ENC_ERR_INVALID_PARAM;
     }
+    if ((int)capsParam->capsToQuery < 0 ||
+        (int)capsParam->capsToQuery >= (int)NV_ENC_CAPS_EXPOSED_COUNT) {
+        return NV_ENC_ERR_INVALID_PARAM;
+    }
 
     switch ((int)capsParam->capsToQuery) {
         case NV_ENC_CAPS_NUM_MAX_BFRAMES:
@@ -654,7 +662,6 @@ static NVENCSTATUS impl_nvEncGetEncodePresetConfigEx(
     NV_ENC_TUNING_INFO tuningInfo, NV_ENC_PRESET_CONFIG *presetConfig)
 {
     (void)presetGUID;
-    (void)tuningInfo;
     if (!as_session(encoder) || !presetConfig) {
         return NV_ENC_ERR_INVALID_PTR;
     }
@@ -669,21 +676,53 @@ static NVENCSTATUS impl_nvEncGetEncodePresetConfigEx(
         return NV_ENC_ERR_INVALID_PARAM;
     }
 
+    int is_ll  = (tuningInfo == NV_ENC_TUNING_INFO_LOW_LATENCY ||
+                  tuningInfo == NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY);
+    int is_ull = (tuningInfo == NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY);
+    int is_los = (tuningInfo == NV_ENC_TUNING_INFO_LOSSLESS);
+    uint32_t gop = is_ll ? 0xffffffffU : 250U;
+
     memset(&presetConfig->presetCfg, 0, sizeof(presetConfig->presetCfg));
     presetConfig->presetCfg.version        = NV_ENC_CONFIG_VER;
     presetConfig->presetCfg.profileGUID    = is_hevc ? NV_ENC_HEVC_PROFILE_MAIN_GUID : NV_ENC_H264_PROFILE_HIGH_GUID;
-    presetConfig->presetCfg.gopLength      = 250U;
+    presetConfig->presetCfg.gopLength      = gop;
     presetConfig->presetCfg.frameIntervalP = 1;
-    presetConfig->presetCfg.rcParams.averageBitRate = 8000000U;
-    presetConfig->presetCfg.rcParams.maxBitRate     = 12000000U;
-    if (is_hevc) {
-        presetConfig->presetCfg.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1U;
-        presetConfig->presetCfg.encodeCodecConfig.hevcConfig.idrPeriod       = 250U;
-        presetConfig->presetCfg.encodeCodecConfig.hevcConfig.outputBitDepth  = NV_ENC_BIT_DEPTH_8;
-        presetConfig->presetCfg.encodeCodecConfig.hevcConfig.inputBitDepth   = NV_ENC_BIT_DEPTH_8;
+    if (is_los) {
+        presetConfig->presetCfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
+    } else if (is_ll) {
+        presetConfig->presetCfg.rcParams.rateControlMode  = NV_ENC_PARAMS_RC_CBR;
+        presetConfig->presetCfg.rcParams.constQP.qpIntra  = 25U;
+        presetConfig->presetCfg.rcParams.constQP.qpInterP = 28U;
+        presetConfig->presetCfg.rcParams.constQP.qpInterB = 31U;
+        if (is_ull) {
+            presetConfig->presetCfg.rcParams.multiPass = 1U;
+        }
     } else {
-        presetConfig->presetCfg.encodeCodecConfig.h264Config.chromaFormatIDC = 1U;
-        presetConfig->presetCfg.encodeCodecConfig.h264Config.idrPeriod       = 250U;
+        presetConfig->presetCfg.rcParams.rateControlMode  = NV_ENC_PARAMS_RC_VBR;
+        presetConfig->presetCfg.rcParams.constQP.qpIntra  = 25U;
+        presetConfig->presetCfg.rcParams.constQP.qpInterP = 28U;
+        presetConfig->presetCfg.rcParams.constQP.qpInterB = 31U;
+    }
+    if (is_hevc) {
+        NV_ENC_CONFIG_HEVC *hc = &presetConfig->presetCfg.encodeCodecConfig.hevcConfig;
+        hc->chromaFormatIDC                          = 1U;
+        hc->idrPeriod                                = gop;
+        hc->outputBitDepth                           = NV_ENC_BIT_DEPTH_8;
+        hc->inputBitDepth                            = NV_ENC_BIT_DEPTH_8;
+        hc->hevcVUIParameters.videoFormat            = 5U;
+        hc->hevcVUIParameters.colourPrimaries        = 2U;
+        hc->hevcVUIParameters.transferCharacteristics = 2U;
+        hc->hevcVUIParameters.colourMatrix           = 2U;
+    } else {
+        NV_ENC_CONFIG_H264 *ac = &presetConfig->presetCfg.encodeCodecConfig.h264Config;
+        ac->adaptiveTransformMode                    = 2U;
+        ac->entropyCodingMode                        = 1U;
+        ac->chromaFormatIDC                          = 1U;
+        ac->idrPeriod                                = gop;
+        ac->h264VUIParameters.videoFormat            = 5U;
+        ac->h264VUIParameters.colourPrimaries        = 2U;
+        ac->h264VUIParameters.transferCharacteristics = 2U;
+        ac->h264VUIParameters.colourMatrix           = 2U;
     }
     return NV_ENC_SUCCESS;
 }
@@ -761,14 +800,94 @@ static void fill_hw_cfg_from_session(const open_nvenc_session_t *s,
     hw_cfg->vbv_buffer_size = s->config.rcParams.vbvBufferSize;
     hw_cfg->fps_num         = s->init_params.frameRateNum;
     hw_cfg->fps_den         = s->init_params.frameRateDen;
+    hw_cfg->target_quality  = s->config.rcParams.targetQuality;
     if (s->config.rcParams.enableMinQP && s->config.rcParams.minQP.qpInterP > 0U) {
         hw_cfg->min_qp = s->config.rcParams.minQP.qpInterP;
     }
     if (s->config.rcParams.enableMaxQP && s->config.rcParams.maxQP.qpInterP > 0U) {
         hw_cfg->max_qp = s->config.rcParams.maxQP.qpInterP;
     }
+    const NV_ENC_CONFIG_HEVC_VUI_PARAMETERS *vui = s->is_hevc
+        ? &s->config.encodeCodecConfig.hevcConfig.hevcVUIParameters
+        : &s->config.encodeCodecConfig.h264Config.h264VUIParameters;
+    hw_cfg->level_idc = s->is_hevc
+        ? s->config.encodeCodecConfig.hevcConfig.level
+        : s->config.encodeCodecConfig.h264Config.level;
+    hw_cfg->tier = s->is_hevc ? s->config.encodeCodecConfig.hevcConfig.tier : 0U;
+    hw_cfg->vui_overscan_present     = vui->overscanInfoPresentFlag;
+    hw_cfg->vui_overscan_info        = vui->overscanInfo;
+    hw_cfg->vui_video_signal_present = vui->videoSignalTypePresentFlag;
+    hw_cfg->vui_video_format         = vui->videoFormat;
+    hw_cfg->vui_full_range           = vui->videoFullRangeFlag;
+    hw_cfg->vui_colour_desc_present  = vui->colourDescriptionPresentFlag;
+    hw_cfg->vui_colour_primaries     = vui->colourPrimaries;
+    hw_cfg->vui_transfer_char        = vui->transferCharacteristics;
+    hw_cfg->vui_matrix_coeffs        = vui->colourMatrix;
+    hw_cfg->vui_chroma_loc_present   = vui->chromaSampleLocationFlag;
+    hw_cfg->vui_chroma_loc_top       = vui->chromaSampleLocationTop;
+    hw_cfg->vui_chroma_loc_bot       = vui->chromaSampleLocationBot;
+    hw_cfg->vui_timing_present       = vui->timingInfoPresentFlag;
+    hw_cfg->vui_num_units_in_tick    = vui->numUnitInTicks;
+    hw_cfg->vui_time_scale           = vui->timeScale;
+
     resolve_hevc_geometry(s, &hw_cfg->chroma_format_idc, &hw_cfg->bit_depth,
                           &hw_cfg->qp, &hw_cfg->qp_p);
+}
+
+static void fill_hevc_hdr_params_from_session(const open_nvenc_session_t *s,
+                                              open_nvenc_hevc_hdr_params_t *ep)
+{
+    uint32_t chroma = 1U, depth = 8U, qp = 24U;
+    resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
+    const NV_ENC_CONFIG_HEVC *hc = &s->config.encodeCodecConfig.hevcConfig;
+    const NV_ENC_CONFIG_HEVC_VUI_PARAMETERS *v = &hc->hevcVUIParameters;
+    memset(ep, 0, sizeof(*ep));
+    ep->width                     = s->init_params.encodeWidth ? s->init_params.encodeWidth : 256U;
+    ep->height                    = s->init_params.encodeHeight ? s->init_params.encodeHeight : 256U;
+    ep->chroma_format_idc         = chroma;
+    ep->bit_depth                 = depth;
+    ep->level_idc                 = hc->level;
+    ep->tier                      = hc->tier;
+    ep->fps_num                   = s->init_params.frameRateNum;
+    ep->fps_den                   = s->init_params.frameRateDen;
+    ep->overscan_present          = v->overscanInfoPresentFlag;
+    ep->overscan_info             = v->overscanInfo;
+    ep->video_signal_type_present = v->videoSignalTypePresentFlag;
+    ep->video_format              = v->videoFormat;
+    ep->video_full_range          = v->videoFullRangeFlag;
+    ep->colour_desc_present       = v->colourDescriptionPresentFlag;
+    ep->colour_primaries          = v->colourPrimaries;
+    ep->transfer_characteristics  = v->transferCharacteristics;
+    ep->matrix_coeffs             = v->colourMatrix;
+    ep->chroma_loc_present        = v->chromaSampleLocationFlag;
+    ep->chroma_loc_top            = v->chromaSampleLocationTop;
+    ep->chroma_loc_bot            = v->chromaSampleLocationBot;
+    ep->timing_present            = v->timingInfoPresentFlag;
+    ep->num_units_in_tick         = v->numUnitInTicks;
+    ep->time_scale                = v->timeScale;
+}
+
+static void fill_h264_hdr_params_from_session(const open_nvenc_session_t *s,
+                                              open_nvenc_h264_hdr_params_t *hp)
+{
+    uint32_t chroma = 1U, depth = 8U, qp = 24U;
+    resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
+    const NV_ENC_CONFIG_H264 *ac = &s->config.encodeCodecConfig.h264Config;
+    const NV_ENC_CONFIG_H264_VUI_PARAMETERS *v = &ac->h264VUIParameters;
+    memset(hp, 0, sizeof(*hp));
+    hp->width                     = s->init_params.encodeWidth ? s->init_params.encodeWidth : 256U;
+    hp->height                    = s->init_params.encodeHeight ? s->init_params.encodeHeight : 256U;
+    hp->chroma_format_idc         = chroma;
+    hp->level_idc                 = ac->level;
+    hp->fps_num                   = s->init_params.frameRateNum;
+    hp->fps_den                   = s->init_params.frameRateDen;
+    hp->video_signal_type_present = v->videoSignalTypePresentFlag;
+    hp->video_format              = v->videoFormat;
+    hp->video_full_range          = v->videoFullRangeFlag;
+    hp->colour_desc_present       = v->colourDescriptionPresentFlag;
+    hp->colour_primaries          = v->colourPrimaries;
+    hp->transfer_characteristics  = v->transferCharacteristics;
+    hp->matrix_coeffs             = v->colourMatrix;
 }
 
 static NVENCSTATUS impl_nvEncInitializeEncoder(
@@ -1072,7 +1191,9 @@ static NVENCSTATUS impl_nvEncEncodePicture(void *encoder, NV_ENC_PIC_PARAMS *par
         return NV_ENC_ERR_INVALID_PARAM;
     }
 
-    int force_idr   = (params->encodePicFlags & NV_ENC_PIC_FLAG_FORCEIDR) ? 1 : 0;
+    int force_idr   = ((params->encodePicFlags & NV_ENC_PIC_FLAG_FORCEIDR) ||
+                       params->pictureType == NV_ENC_PIC_TYPE_IDR ||
+                       params->pictureType == NV_ENC_PIC_TYPE_I) ? 1 : 0;
     int force_intra = (params->encodePicFlags & NV_ENC_PIC_FLAG_FORCEINTRA) ? 1 : 0;
     int emit_spspps = (params->encodePicFlags & NV_ENC_PIC_FLAG_OUTPUT_SPSPPS) ? 1 : 0;
     int is_idr      = (force_idr || force_intra) ? 1 : 0;
@@ -1124,12 +1245,12 @@ static NVENCSTATUS impl_nvEncEncodePicture(void *encoder, NV_ENC_PIC_PARAMS *par
         if (s->rm.frames_encoded == 0U || (gop > 0U && (s->rm.frames_encoded % gop) == 0U)) {
             is_idr = 1;
         }
-        size_t hdr_n = (is_idr || emit_spspps)
-                           ? open_nvenc_hevc_write_headers(
-                                 bs->data, bs->capacity,
-                                 s->init_params.encodeWidth, s->init_params.encodeHeight,
-                                 chroma, depth)
-                           : 0U;
+        size_t hdr_n = 0U;
+        if (is_idr || emit_spspps) {
+            open_nvenc_hevc_hdr_params_t ep;
+            fill_hevc_hdr_params_from_session(s, &ep);
+            hdr_n = open_nvenc_hevc_write_headers_ex(bs->data, bs->capacity, &ep);
+        }
         static const uint8_t hevc_offline_idr[] = {
             0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xaf, 0x08, 0x40
         };
@@ -1215,25 +1336,19 @@ static NVENCSTATUS impl_nvEncGetSequenceParams(
         return NV_ENC_ERR_INVALID_PTR;
     }
     if (s->is_hevc) {
-        uint32_t chroma = 1U, depth = 8U, qp = 24U;
-        resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
-        size_t n = open_nvenc_hevc_write_headers(
-            (uint8_t *)payload->spsppsBuffer, payload->inBufferSize,
-            s->init_params.encodeWidth ? s->init_params.encodeWidth : 256U,
-            s->init_params.encodeHeight ? s->init_params.encodeHeight : 256U,
-            chroma, depth);
+        open_nvenc_hevc_hdr_params_t ep;
+        fill_hevc_hdr_params_from_session(s, &ep);
+        size_t n = open_nvenc_hevc_write_headers_ex(
+            (uint8_t *)payload->spsppsBuffer, payload->inBufferSize, &ep);
         if (n > 0U) {
             *payload->outSPSPPSPayloadSize = (uint32_t)n;
             return NV_ENC_SUCCESS;
         }
     } else {
-        uint32_t chroma = 1U, depth = 8U, qp = 24U;
-        resolve_hevc_geometry(s, &chroma, &depth, &qp, NULL);
-        size_t n = open_nvenc_h264_write_headers(
-            (uint8_t *)payload->spsppsBuffer, payload->inBufferSize,
-            s->init_params.encodeWidth ? s->init_params.encodeWidth : 256U,
-            s->init_params.encodeHeight ? s->init_params.encodeHeight : 256U,
-            chroma);
+        open_nvenc_h264_hdr_params_t hp;
+        fill_h264_hdr_params_from_session(s, &hp);
+        size_t n = open_nvenc_h264_write_headers_ex(
+            (uint8_t *)payload->spsppsBuffer, payload->inBufferSize, &hp);
         if (n > 0U) {
             *payload->outSPSPPSPayloadSize = (uint32_t)n;
             return NV_ENC_SUCCESS;
@@ -1349,13 +1464,16 @@ typedef struct {
     int   (*stream_sync)(void *hStream);
     int   (*memcpy_dtoh)(void *dstHost, uint64_t srcDevice, size_t byteCount);
     int   (*memcpy_2d)(const open_cu_memcpy2d_t *pCopy);
+    int   (*mem_host_alloc)(void **pp, size_t bytesize, unsigned int flags);
+    int   (*mem_free_host)(void *p);
 } open_cuda_syms_t;
 
 static open_cuda_syms_t g_cuda_syms;
 
 static void ensure_cuda_syms(void)
 {
-    if (g_cuda_syms.memcpy_dtoh && g_cuda_syms.memcpy_2d && g_cuda_syms.ctx_sync) {
+    if (g_cuda_syms.memcpy_dtoh && g_cuda_syms.memcpy_2d &&
+        g_cuda_syms.ctx_sync && g_cuda_syms.mem_host_alloc) {
         return;
     }
     void *dl_tmp = NULL;
@@ -1380,6 +1498,34 @@ static void ensure_cuda_syms(void)
     if (!g_cuda_syms.memcpy_2d) {
         g_cuda_syms.memcpy_2d = (int (*)(const open_cu_memcpy2d_t *))lookup_cuda_sym("cuMemcpy2D_v2", "cuMemcpy2D", &dl_tmp);
     }
+    if (!g_cuda_syms.mem_host_alloc) {
+        g_cuda_syms.mem_host_alloc = (int (*)(void **, size_t, unsigned int))lookup_cuda_sym("cuMemHostAlloc", NULL, &dl_tmp);
+    }
+    if (!g_cuda_syms.mem_free_host) {
+        g_cuda_syms.mem_free_host = (int (*)(void *))lookup_cuda_sym("cuMemFreeHost", NULL, &dl_tmp);
+    }
+}
+
+static int push_session_cuda_ctx(const open_nvenc_session_t *s)
+{
+    void *cur_ctx = NULL;
+    if (s && s->device_type == NV_ENC_DEVICE_TYPE_CUDA && s->device_ptr &&
+        g_cuda_syms.ctx_get_cur && g_cuda_syms.ctx_push) {
+        if (g_cuda_syms.ctx_get_cur(&cur_ctx) == 0 && cur_ctx != s->device_ptr) {
+            if (g_cuda_syms.ctx_push(s->device_ptr) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void pop_session_cuda_ctx(int pushed)
+{
+    if (pushed && g_cuda_syms.ctx_pop) {
+        void *dummy = NULL;
+        (void)g_cuda_syms.ctx_pop(&dummy);
+    }
 }
 
 static NVENCSTATUS sync_cuda_reg_to_host(open_nvenc_session_t *s, open_nvenc_reg_res_t *rr)
@@ -1393,16 +1539,7 @@ static NVENCSTATUS sync_cuda_reg_to_host(open_nvenc_session_t *s, open_nvenc_reg
 
     ensure_cuda_syms();
 
-    void *cur_ctx = NULL;
-    int pushed_ctx = 0;
-    if (s->device_type == NV_ENC_DEVICE_TYPE_CUDA && s->device_ptr &&
-        g_cuda_syms.ctx_get_cur && g_cuda_syms.ctx_push) {
-        if (g_cuda_syms.ctx_get_cur(&cur_ctx) == 0 && cur_ctx != s->device_ptr) {
-            if (g_cuda_syms.ctx_push(s->device_ptr) == 0) {
-                pushed_ctx = 1;
-            }
-        }
-    }
+    int pushed_ctx = push_session_cuda_ctx(s);
     if (s->in_cuda_stream && g_cuda_syms.stream_sync) {
         (void)g_cuda_syms.stream_sync(s->in_cuda_stream);
     } else if (g_cuda_syms.ctx_sync) {
@@ -1458,10 +1595,7 @@ static NVENCSTATUS sync_cuda_reg_to_host(open_nvenc_session_t *s, open_nvenc_reg
         }
     }
 
-    if (pushed_ctx && g_cuda_syms.ctx_pop) {
-        void *dummy = NULL;
-        (void)g_cuda_syms.ctx_pop(&dummy);
-    }
+    pop_session_cuda_ctx(pushed_ctx);
     return map_st;
 }
 
@@ -1492,11 +1626,24 @@ static NVENCSTATUS impl_nvEncRegisterResource(
                                                    rr->mapped_buf.height,
                                                    rr->mapped_buf.fmt,
                                                    params->chromaOffset);
-        rr->cuda_host_size  = sz ? sz : 4096U;
-        rr->mapped_buf.data = (uint8_t *)calloc(1U, rr->cuda_host_size);
+        rr->cuda_host_size = sz ? sz : 4096U;
+        ensure_cuda_syms();
+        if (g_cuda_syms.mem_host_alloc) {
+            void *pinned = NULL;
+            int pushed = push_session_cuda_ctx(s);
+            if (g_cuda_syms.mem_host_alloc(&pinned, rr->cuda_host_size, 1U) == 0 && pinned) {
+                memset(pinned, 0, rr->cuda_host_size);
+                rr->mapped_buf.data = (uint8_t *)pinned;
+                rr->cuda_pinned     = 1;
+            }
+            pop_session_cuda_ctx(pushed);
+        }
         if (!rr->mapped_buf.data) {
-            free(rr);
-            return NV_ENC_ERR_OUT_OF_MEMORY;
+            rr->mapped_buf.data = (uint8_t *)calloc(1U, rr->cuda_host_size);
+            if (!rr->mapped_buf.data) {
+                free(rr);
+                return NV_ENC_ERR_OUT_OF_MEMORY;
+            }
         }
         rr->mapped_buf.size = rr->cuda_host_size;
         if (params->resourceType == NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR) {
@@ -1510,10 +1657,11 @@ static NVENCSTATUS impl_nvEncRegisterResource(
     params->registeredResource = rr;
     {
         char detail[128];
-        snprintf(detail, sizeof(detail), "type=%u fmt=0x%x %ux%u pitch=%u co=%u,%u",
+        snprintf(detail, sizeof(detail), "type=%u fmt=0x%x %ux%u pitch=%u co=%u,%u pinned=%d",
                  params->resourceType, (unsigned)rr->mapped_buf.fmt,
                  rr->mapped_buf.width, rr->mapped_buf.height,
-                 rr->mapped_buf.pitch, params->chromaOffset[0], params->chromaOffset[1]);
+                 rr->mapped_buf.pitch, params->chromaOffset[0], params->chromaOffset[1],
+                 rr->cuda_pinned);
         trace_nvenc_event("nvEncRegisterResource", NV_ENC_SUCCESS, detail);
     }
     return NV_ENC_SUCCESS;
@@ -1522,7 +1670,8 @@ static NVENCSTATUS impl_nvEncRegisterResource(
 static NVENCSTATUS impl_nvEncUnregisterResource(
     void *encoder, NV_ENC_REGISTERED_PTR registeredResource)
 {
-    if (!as_session(encoder) || !registeredResource) {
+    open_nvenc_session_t *s = as_session(encoder);
+    if (!s || !registeredResource) {
         return NV_ENC_ERR_INVALID_PTR;
     }
     open_nvenc_reg_res_t *rr = (open_nvenc_reg_res_t *)registeredResource;
@@ -1530,7 +1679,13 @@ static NVENCSTATUS impl_nvEncUnregisterResource(
         return NV_ENC_ERR_INVALID_PARAM;
     }
     if ((rr->is_cuda_devptr || rr->is_cuda_array) && rr->mapped_buf.data) {
-        free(rr->mapped_buf.data);
+        if (rr->cuda_pinned && g_cuda_syms.mem_free_host) {
+            int pushed = push_session_cuda_ctx(s);
+            (void)g_cuda_syms.mem_free_host(rr->mapped_buf.data);
+            pop_session_cuda_ctx(pushed);
+        } else {
+            free(rr->mapped_buf.data);
+        }
         rr->mapped_buf.data = NULL;
     }
     rr->magic = 0U;
@@ -1548,11 +1703,6 @@ static NVENCSTATUS impl_nvEncMapInputResource(
     open_nvenc_reg_res_t *rr = (open_nvenc_reg_res_t *)params->registeredResource;
     if (rr->magic != OPEN_NVENC_REGRES_MAGIC) {
         return NV_ENC_ERR_INVALID_PARAM;
-    }
-    NVENCSTATUS map_st = sync_cuda_reg_to_host(s, rr);
-    if (map_st != NV_ENC_SUCCESS) {
-        trace_nvenc_event("nvEncMapInputResource", map_st, s->last_error);
-        return map_st;
     }
     params->mappedResource  = &rr->mapped_buf;
     params->mappedBufferFmt = rr->mapped_buf.fmt;
@@ -1653,6 +1803,10 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
         } else {
             uint32_t chroma = 1U, depth = 8U, qp = 24U, qp_p = 24U;
             resolve_hevc_geometry(s, &chroma, &depth, &qp, &qp_p);
+            uint32_t min_qp = (s->config.rcParams.enableMinQP && s->config.rcParams.minQP.qpInterP > 0U)
+                                  ? s->config.rcParams.minQP.qpInterP : 0U;
+            uint32_t max_qp = (s->config.rcParams.enableMaxQP && s->config.rcParams.maxQP.qpInterP > 0U)
+                                  ? s->config.rcParams.maxQP.qpInterP : 0U;
             open_nvenc_hw_update_cfg(s->hw, s->config.gopLength, qp, qp_p,
                                      s->config.rcParams.rateControlMode,
                                      s->config.rcParams.averageBitRate,
@@ -1660,6 +1814,8 @@ static NVENCSTATUS impl_nvEncReconfigureEncoder(
                                      s->config.rcParams.vbvBufferSize,
                                      s->init_params.frameRateNum,
                                      s->init_params.frameRateDen,
+                                     min_qp, max_qp,
+                                     s->config.rcParams.targetQuality,
                                      params->forceIDR ? 1 : 0);
         }
     }
@@ -1915,6 +2071,9 @@ void *NvToolCreateInterface(int type)
 void NvToolDestroyInterface(void *pToolIface)
 {
     if (pToolIface && pToolIface != &g_nvtool_default_obj) {
+        if (g_nvtool_active_iface == pToolIface) {
+            g_nvtool_active_iface = g_nvtool_default_iface;
+        }
         free(pToolIface);
     }
 }

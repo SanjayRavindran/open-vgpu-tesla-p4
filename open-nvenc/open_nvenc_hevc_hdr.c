@@ -117,21 +117,39 @@ static size_t emit_nal(uint8_t *dst, size_t cap,
     return out;
 }
 
-static uint8_t compute_level_idc(uint32_t w, uint32_t h)
+static uint8_t compute_level_idc(uint32_t coded_w, uint32_t coded_h,
+                                   uint32_t fps_num, uint32_t fps_den)
 {
-    uint64_t luma_samples = (uint64_t)w * (uint64_t)h;
-    if (luma_samples <= 552960ULL) {
+    uint64_t luma_samples = (uint64_t)coded_w * (uint64_t)coded_h;
+    uint32_t fn = (fps_num > 0U) ? fps_num : 60U;
+    uint32_t fd = (fps_den > 0U) ? fps_den : 1U;
+    uint64_t sample_rate = (luma_samples * (uint64_t)fn + (uint64_t)fd - 1ULL) / (uint64_t)fd;
+
+    if (luma_samples <= 552960ULL && sample_rate <= 16588800ULL) {
         return 90U;  /* Level 3.0 */
     }
-    if (luma_samples <= 2228224ULL) {
+    if (luma_samples <= 983040ULL && sample_rate <= 33423360ULL) {
+        return 93U;  /* Level 3.1 */
+    }
+    if (luma_samples <= 2228224ULL && sample_rate <= 66846720ULL) {
         return 120U; /* Level 4.0 */
     }
-    return 153U;     /* Level 5.1 */
+    if (luma_samples <= 2228224ULL && sample_rate <= 133693440ULL) {
+        return 123U; /* Level 4.1 */
+    }
+    if (luma_samples <= 8912896ULL && sample_rate <= 267386880ULL) {
+        return 150U; /* Level 5.0 */
+    }
+    if (luma_samples <= 8912896ULL && sample_rate <= 534773760ULL) {
+        return 153U; /* Level 5.1 */
+    }
+    return 156U;     /* Level 5.2 */
 }
 
 static void write_profile_tier_level(hevc_bitwriter_t *bw,
                                      uint32_t chroma_format_idc,
                                      uint32_t bit_depth,
+                                     uint32_t tier_flag,
                                      uint8_t level_idc)
 {
     uint32_t profile_idc = 1U; /* Main */
@@ -141,9 +159,9 @@ static void write_profile_tier_level(hevc_bitwriter_t *bw,
         profile_idc = 2U;      /* Main 10 */
     }
 
-    bw_put_bits(bw, 0U, 2);           /* general_profile_space */
-    bw_put_bit(bw, 0U);               /* general_tier_flag */
-    bw_put_bits(bw, profile_idc, 5);  /* general_profile_idc */
+    bw_put_bits(bw, 0U, 2);                   /* general_profile_space */
+    bw_put_bit(bw, tier_flag ? 1U : 0U);      /* general_tier_flag */
+    bw_put_bits(bw, profile_idc, 5);          /* general_profile_idc */
 
     uint32_t compat = 1U << (31U - profile_idc);
     bw_put_bits(bw, compat, 32);
@@ -176,7 +194,7 @@ static void write_profile_tier_level(hevc_bitwriter_t *bw,
 
 static size_t build_vps_rbsp(uint8_t *rbsp, size_t cap,
                              uint32_t chroma_format_idc, uint32_t bit_depth,
-                             uint8_t level_idc)
+                             uint32_t tier_flag, uint8_t level_idc)
 {
     hevc_bitwriter_t bw;
     bw_init(&bw, rbsp, cap);
@@ -189,7 +207,7 @@ static size_t build_vps_rbsp(uint8_t *rbsp, size_t cap,
     bw_put_bit(&bw, 1U);          /* vps_temporal_id_nesting_flag */
     bw_put_bits(&bw, 0xffffU, 16);/* vps_reserved_0xffff_16bits */
 
-    write_profile_tier_level(&bw, chroma_format_idc, bit_depth, level_idc);
+    write_profile_tier_level(&bw, chroma_format_idc, bit_depth, tier_flag, level_idc);
 
     bw_put_bit(&bw, 1U);          /* vps_sub_layer_ordering_info_present_flag */
     bw_put_ue(&bw, 1U);           /* vps_max_dec_pic_buffering_minus1[0] */
@@ -205,10 +223,12 @@ static size_t build_vps_rbsp(uint8_t *rbsp, size_t cap,
 }
 
 static size_t build_sps_rbsp(uint8_t *rbsp, size_t cap,
-                             uint32_t width, uint32_t height,
+                             const open_nvenc_hevc_hdr_params_t *p,
                              uint32_t chroma_format_idc, uint32_t bit_depth,
                              uint8_t level_idc)
 {
+    uint32_t width   = p->width;
+    uint32_t height  = p->height;
     uint32_t coded_w = (width + 31U) & ~31U;
     uint32_t coded_h = (height + 31U) & ~31U;
     uint32_t sub_w = (chroma_format_idc == 1U) ? 2U : 1U;
@@ -222,7 +242,7 @@ static size_t build_sps_rbsp(uint8_t *rbsp, size_t cap,
     bw_put_bits(&bw, 0U, 3);      /* sps_max_sub_layers_minus1 */
     bw_put_bit(&bw, 1U);          /* sps_temporal_id_nesting_flag */
 
-    write_profile_tier_level(&bw, chroma_format_idc, bit_depth, level_idc);
+    write_profile_tier_level(&bw, chroma_format_idc, bit_depth, p->tier, level_idc);
 
     bw_put_ue(&bw, 0U);                   /* sps_seq_parameter_set_id */
     bw_put_ue(&bw, chroma_format_idc);    /* chroma_format_idc (1=4:2:0, 3=4:4:4) */
@@ -271,7 +291,53 @@ static size_t build_sps_rbsp(uint8_t *rbsp, size_t cap,
     bw_put_bit(&bw, 0U);                  /* long_term_ref_pics_present_flag */
     bw_put_bit(&bw, 0U);                  /* sps_temporal_mvp_enabled_flag */
     bw_put_bit(&bw, 0U);                  /* strong_intra_smoothing_enabled_flag */
-    bw_put_bit(&bw, 0U);                  /* vui_parameters_present_flag */
+
+    int has_timing = (p->timing_present || (p->fps_num > 0U && p->fps_den > 0U)) ? 1 : 0;
+    int has_vui = (p->video_signal_type_present || p->overscan_present ||
+                   p->chroma_loc_present || has_timing) ? 1 : 0;
+    bw_put_bit(&bw, has_vui ? 1U : 0U);   /* vui_parameters_present_flag */
+    if (has_vui) {
+        bw_put_bit(&bw, 0U);                                  /* aspect_ratio_info_present_flag */
+        bw_put_bit(&bw, p->overscan_present ? 1U : 0U);       /* overscan_info_present_flag */
+        if (p->overscan_present) {
+            bw_put_bit(&bw, p->overscan_info ? 1U : 0U);      /* overscan_appropriate_flag */
+        }
+        bw_put_bit(&bw, p->video_signal_type_present ? 1U : 0U); /* video_signal_type_present_flag */
+        if (p->video_signal_type_present) {
+            bw_put_bits(&bw, p->video_format & 7U, 3);        /* video_format */
+            bw_put_bit(&bw, p->video_full_range ? 1U : 0U);   /* video_full_range_flag */
+            bw_put_bit(&bw, p->colour_desc_present ? 1U : 0U);/* colour_description_present_flag */
+            if (p->colour_desc_present) {
+                bw_put_bits(&bw, p->colour_primaries & 0xffU, 8);
+                bw_put_bits(&bw, p->transfer_characteristics & 0xffU, 8);
+                bw_put_bits(&bw, p->matrix_coeffs & 0xffU, 8);
+            }
+        }
+        bw_put_bit(&bw, p->chroma_loc_present ? 1U : 0U);     /* chroma_loc_info_present_flag */
+        if (p->chroma_loc_present) {
+            bw_put_ue(&bw, p->chroma_loc_top);
+            bw_put_ue(&bw, p->chroma_loc_bot);
+        }
+        bw_put_bit(&bw, 0U);                                  /* neutral_chroma_indication_flag */
+        bw_put_bit(&bw, 0U);                                  /* field_seq_flag */
+        bw_put_bit(&bw, 0U);                                  /* frame_field_info_present_flag */
+        bw_put_bit(&bw, 0U);                                  /* default_display_window_flag */
+        bw_put_bit(&bw, has_timing ? 1U : 0U);                /* vui_timing_info_present_flag */
+        if (has_timing) {
+            uint32_t ticks = (p->timing_present && p->num_units_in_tick > 0U)
+                                 ? p->num_units_in_tick
+                                 : (p->fps_den ? p->fps_den : 1U);
+            uint32_t scale = (p->timing_present && p->time_scale > 0U)
+                                 ? p->time_scale
+                                 : (p->fps_num ? p->fps_num : 60U);
+            bw_put_bits(&bw, ticks, 32);                      /* vui_num_units_in_tick */
+            bw_put_bits(&bw, scale, 32);                      /* vui_time_scale */
+            bw_put_bit(&bw, 0U);                              /* vui_poc_proportional_to_timing_flag */
+            bw_put_bit(&bw, 0U);                              /* vui_hrd_parameters_present_flag */
+        }
+        bw_put_bit(&bw, 0U);                                  /* bitstream_restriction_flag */
+    }
+
     bw_put_bit(&bw, 0U);                  /* sps_extension_present_flag */
     bw_rbsp_trailing(&bw);
 
@@ -324,29 +390,31 @@ static size_t build_pps_rbsp(uint8_t *rbsp, size_t cap,
     return bw.overflow ? 0U : bw.byte_pos;
 }
 
-size_t open_nvenc_hevc_write_headers(uint8_t *dst, size_t cap,
-                                     uint32_t width, uint32_t height,
-                                     uint32_t chroma_format_idc,
-                                     uint32_t bit_depth)
+size_t open_nvenc_hevc_write_headers_ex(uint8_t *dst, size_t cap,
+                                        const open_nvenc_hevc_hdr_params_t *p)
 {
-    if (!dst || cap < 64U || width < 16U || height < 16U) {
+    if (!dst || !p || cap < 64U || p->width < 16U || p->height < 16U) {
         return 0U;
     }
-    if (chroma_format_idc != 1U && chroma_format_idc != 3U) {
-        chroma_format_idc = 1U;
-    }
-    if (bit_depth != 8U && bit_depth != 10U) {
-        bit_depth = 8U;
+    uint32_t chroma_format_idc = (p->chroma_format_idc == 3U) ? 3U : 1U;
+    uint32_t bit_depth         = (p->bit_depth == 10U) ? 10U : 8U;
+
+    uint32_t coded_w = (p->width + 31U) & ~31U;
+    uint32_t coded_h = (p->height + 31U) & ~31U;
+    uint8_t auto_lvl = compute_level_idc(coded_w, coded_h, p->fps_num, p->fps_den);
+    uint8_t level_idc = auto_lvl;
+    if (p->level_idc >= 30U && p->level_idc <= 186U) {
+        level_idc = (uint8_t)p->level_idc;
+        if (auto_lvl > level_idc) {
+            level_idc = auto_lvl;
+        }
     }
 
-    uint32_t coded_w = (width + 31U) & ~31U;
-    uint32_t coded_h = (height + 31U) & ~31U;
-    uint8_t level_idc = compute_level_idc(coded_w, coded_h);
-
-    uint8_t rbsp[128];
+    uint8_t rbsp[256];
     size_t off = 0U;
 
-    size_t vps_rbsp_len = build_vps_rbsp(rbsp, sizeof(rbsp), chroma_format_idc, bit_depth, level_idc);
+    size_t vps_rbsp_len = build_vps_rbsp(rbsp, sizeof(rbsp), chroma_format_idc, bit_depth,
+                                         p->tier, level_idc);
     if (vps_rbsp_len == 0U) {
         return 0U;
     }
@@ -356,7 +424,7 @@ size_t open_nvenc_hevc_write_headers(uint8_t *dst, size_t cap,
     }
     off += n;
 
-    size_t sps_rbsp_len = build_sps_rbsp(rbsp, sizeof(rbsp), width, height, chroma_format_idc, bit_depth, level_idc);
+    size_t sps_rbsp_len = build_sps_rbsp(rbsp, sizeof(rbsp), p, chroma_format_idc, bit_depth, level_idc);
     if (sps_rbsp_len == 0U) {
         return 0U;
     }
@@ -377,4 +445,20 @@ size_t open_nvenc_hevc_write_headers(uint8_t *dst, size_t cap,
     off += n;
 
     return off;
+}
+
+size_t open_nvenc_hevc_write_headers(uint8_t *dst, size_t cap,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t chroma_format_idc,
+                                     uint32_t bit_depth)
+{
+    open_nvenc_hevc_hdr_params_t p;
+    memset(&p, 0, sizeof(p));
+    p.width             = width;
+    p.height            = height;
+    p.chroma_format_idc = chroma_format_idc;
+    p.bit_depth         = bit_depth;
+    p.fps_num           = 60U;
+    p.fps_den           = 1U;
+    return open_nvenc_hevc_write_headers_ex(dst, cap, &p);
 }

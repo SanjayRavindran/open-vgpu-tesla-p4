@@ -339,6 +339,16 @@ int main(void)
                           NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_H264_PROFILE_MAIN_GUID,
                           1U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
                           NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 30U);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/h264_nv12_1784x992.h264",
+                          NV_ENC_CODEC_H264_GUID, 1784U, 992U,
+                          NV_ENC_BUFFER_FORMAT_NV12, NV_ENC_H264_PROFILE_MAIN_GUID,
+                          1U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 60U);
+    run_hw_codec_gop_case(&fn, "/tmp/open_nvenc_hw_test/h264_y444_1784x992.h264",
+                          NV_ENC_CODEC_H264_GUID, 1784U, 992U,
+                          NV_ENC_BUFFER_FORMAT_YUV444, NV_ENC_H264_PROFILE_HIGH_444_GUID,
+                          3U, NV_ENC_BIT_DEPTH_8, 5U, 30U, -1,
+                          NV_ENC_PARAMS_RC_CONSTQP, 0U, 0U, 60U);
     run_hw_gop_case(&fn, "/tmp/open_nvenc_hw_test/hevc_y444_8b_256.h265",
                     256U, 256U, NV_ENC_BUFFER_FORMAT_YUV444,
                     NV_ENC_HEVC_PROFILE_FREXT_GUID, 3U, NV_ENC_BIT_DEPTH_8,

@@ -293,6 +293,8 @@ struct _open_nvenc_hw_ctx {
     double   rc_bits_per_frame;
     double   rc_vbv_size;
     uint32_t rc_cur_qp;
+
+    uint8_t *stage_buf;
 };
 
 static size_t hw_page_size(void)
@@ -758,9 +760,9 @@ static void rc_init_state(open_nvenc_hw_ctx_t *ctx)
     uint32_t max_qp = (ctx->cfg.max_qp > min_qp && ctx->cfg.max_qp <= 51U) ? ctx->cfg.max_qp : 46U;
     double fps = (ctx->cfg.fps_num > 0U && ctx->cfg.fps_den > 0U)
                      ? ((double)ctx->cfg.fps_num / (double)ctx->cfg.fps_den)
-                     : 30.0;
+                     : 60.0;
     if (fps < 1.0) {
-        fps = 30.0;
+        fps = 60.0;
     }
 
     uint32_t target_bps = ctx->cfg.average_bitrate ? ctx->cfg.average_bitrate : ctx->cfg.max_bitrate;
@@ -793,6 +795,12 @@ static void rc_init_state(open_nvenc_hw_ctx_t *ctx)
             init_qp = max_qp;
         }
         ctx->rc_cur_qp = init_qp;
+    } else if (ctx->cfg.rc_mode == NV_ENC_PARAMS_RC_VBR &&
+               ctx->cfg.target_quality > 0U && ctx->cfg.target_quality <= 51U) {
+        ctx->rc_bits_per_frame = 0.0;
+        ctx->rc_vbv_size       = 0.0;
+        ctx->rc_vbv_level      = 0.0;
+        ctx->rc_cur_qp         = ctx->cfg.target_quality;
     } else {
         ctx->rc_bits_per_frame = 0.0;
         ctx->rc_vbv_size       = 0.0;
@@ -810,6 +818,10 @@ static uint32_t rc_select_frame_qp(const open_nvenc_hw_ctx_t *ctx, int is_idr)
             qp -= 2U;
         }
         return qp;
+    }
+    if (ctx->cfg.rc_mode == NV_ENC_PARAMS_RC_VBR &&
+        ctx->cfg.target_quality > 0U && ctx->cfg.target_quality <= 51U) {
+        return ctx->cfg.target_quality;
     }
     uint32_t qp_i = (ctx->cfg.qp <= 51U) ? ctx->cfg.qp : 24U;
     uint32_t qp_p = (ctx->cfg.qp_p > 0U && ctx->cfg.qp_p <= 51U) ? ctx->cfg.qp_p : qp_i;
@@ -1018,15 +1030,20 @@ static void build_pic_setup_h264(const open_nvenc_hw_ctx_t *ctx,
     uint32_t width     = ctx->cfg.width;
     uint32_t aligned_w = ctx->aligned_w;
     uint32_t aligned_h = ctx->aligned_h;
+    uint32_t w16       = ctx->mb_w << 4;
     uint32_t h16       = ctx->mb_h << 4;
     int      is_444    = (ctx->cfg.chroma_format_idc == 3U);
     uint32_t gop_len   = (ctx->cfg.gop_length > 0U) ? ctx->cfg.gop_length : 0xfaU;
-    uint8_t  level_idc = open_nvenc_h264_compute_level_idc(width, ctx->cfg.height);
+    uint8_t  level_idc = open_nvenc_h264_compute_level_idc_fps(width, ctx->cfg.height,
+                                                               ctx->cfg.fps_num, ctx->cfg.fps_den);
+    if (ctx->cfg.level_idc >= 10U && ctx->cfg.level_idc <= 62U && (uint8_t)ctx->cfg.level_idc > level_idc) {
+        level_idc = (uint8_t)ctx->cfg.level_idc;
+    }
 
     uint32_t y_plane_pages  = (aligned_w * aligned_h) >> 8;
     uint32_t uv_plane_pages = (aligned_w * ctx->uv_aligned_h) >> 8;
     uint32_t uv_stride_hdr  = is_444 ? (aligned_w * 2U) : aligned_w;
-    uint32_t dims_m1        = ((h16 - 1U) << 16) | (width - 1U);
+    uint32_t dims_m1        = ((h16 - 1U) << 16) | (w16 - 1U);
     uint32_t stride_word    = (uv_stride_hdr << 16) | aligned_w;
     uint32_t fmt_slot_word  = is_444 ? 0x00000302U : 0x00000002U;
 
@@ -1588,6 +1605,12 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     init_qm_rc_buf((uint32_t *)ctx->qm_rc_buf.cpu);
     rc_init_state(ctx);
 
+    if (posix_memalign((void **)&ctx->stage_buf, 64U, ctx->surface_size) != 0) {
+        ctx->stage_buf = (uint8_t *)calloc(1U, ctx->surface_size);
+    } else {
+        memset(ctx->stage_buf, 0, ctx->surface_size);
+    }
+
     /* Optional NVC0B5 Copy Engine vidmem zero-clear (skips gracefully if unavailable) */
     {
         hw_buf_t *const ce_clear_list[] = {
@@ -1686,6 +1709,8 @@ void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx, open_nvenc_rm_stats_t *rm_s
     free_hw_buf(ctx, &ctx->pic_setup_buf, ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->sema_buf, ctx->h_vaspace, rm_stats);
     free_hw_buf(ctx, &ctx->err_buf, ctx->h_vaspace, rm_stats);
+    free(ctx->stage_buf);
+    ctx->stage_buf = NULL;
 
     if (ctx->h_nvenc) {
         (void)rm_free(ctx->ctl_fd, ctx->h_client, ctx->h_channel, ctx->h_nvenc, rm_stats);
@@ -1765,9 +1790,540 @@ static inline size_t gob_bl_offset(uint32_t x_byte, uint32_t y, uint32_t pitch_b
     return (size_t)gob_idx * 512U + (size_t)in_gob;
 }
 
+/* Write a full 64-byte GOB row into Pascal 16Bx2 layout via four 16-byte stores. */
+static inline void bl16_store_gob_row64(uint8_t *gob_base, uint32_t row_in_gob, const uint8_t *src64)
+{
+    uint8_t *r0 = gob_base + row_in_gob;
+    memcpy(r0 + 0x000U, src64 + 0U,  16U);
+    memcpy(r0 + 0x040U, src64 + 16U, 16U);
+    memcpy(r0 + 0x100U, src64 + 32U, 16U);
+    memcpy(r0 + 0x140U, src64 + 48U, 16U);
+}
+
+static void swizzle_plane_linear_to_bl16(uint8_t *dst, size_t dst_avail,
+                                         const uint8_t *src, uint32_t src_pitch,
+                                         uint32_t w_bytes, uint32_t elem_bytes,
+                                         uint32_t h, uint32_t dst_pitch, uint32_t dst_h)
+{
+    if (dst_pitch < 64U || (dst_pitch & 63U) != 0U || (dst_h & 15U) != 0U || w_bytes < elem_bytes) {
+        for (uint32_t y = 0U; y < dst_h; y++) {
+            uint32_t sy = (y < h) ? y : (h - 1U);
+            const uint8_t *srow = src + (size_t)sy * src_pitch;
+            for (uint32_t xb = 0U; xb < dst_pitch; xb++) {
+                uint32_t sxb = (xb < w_bytes) ? xb : (w_bytes - elem_bytes + (xb % elem_bytes));
+                size_t off = gob_bl_offset(xb, y, dst_pitch);
+                if (off < dst_avail) {
+                    dst[off] = srow[sxb];
+                }
+            }
+        }
+        return;
+    }
+
+    uint32_t width_in_gobs = dst_pitch >> 6;
+    uint32_t n_gob_y       = dst_h >> 3;
+    uint32_t full_gobs     = w_bytes >> 6;
+    if (full_gobs > width_in_gobs) {
+        full_gobs = width_in_gobs;
+    }
+
+    for (uint32_t gob_y = 0U; gob_y < n_gob_y; gob_y++) {
+        uint32_t by_blk      = gob_y >> 1;
+        uint32_t by_in       = gob_y & 1U;
+        size_t   row_gob_idx = (size_t)by_blk * (size_t)width_in_gobs * 2U + (size_t)by_in;
+        for (uint32_t y_in = 0U; y_in < 8U; y_in++) {
+            uint32_t y          = (gob_y << 3) | y_in;
+            uint32_t sy         = (y < h) ? y : (h - 1U);
+            const uint8_t *srow = src + (size_t)sy * src_pitch;
+            uint32_t row_in_gob = (((y_in >> 2) & 1U) << 7) | ((y_in & 3U) << 4);
+
+            for (uint32_t gx = 0U; gx < full_gobs; gx++) {
+                size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                if (g_off + 512U <= dst_avail) {
+                    bl16_store_gob_row64(dst + g_off, row_in_gob, srow + ((size_t)gx << 6));
+                }
+            }
+            for (uint32_t gx = full_gobs; gx < width_in_gobs; gx++) {
+                uint8_t pad64[64];
+                uint32_t base_x = gx << 6;
+                uint32_t rem    = (base_x < w_bytes) ? (w_bytes - base_x) : 0U;
+                if (rem > 0U) {
+                    memcpy(pad64, srow + base_x, rem);
+                }
+                const uint8_t *last_px = srow + (w_bytes - elem_bytes);
+                for (uint32_t off = rem; off < 64U; off += elem_bytes) {
+                    if (elem_bytes == 1U) {
+                        pad64[off] = last_px[0];
+                    } else if (elem_bytes == 2U && off + 2U <= 64U) {
+                        memcpy(&pad64[off], last_px, 2U);
+                    } else if (off + 4U <= 64U) {
+                        memcpy(&pad64[off], last_px, 4U);
+                    }
+                }
+                size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                if (g_off + 512U <= dst_avail) {
+                    bl16_store_gob_row64(dst + g_off, row_in_gob, pad64);
+                }
+            }
+        }
+    }
+}
+
+static void swizzle_uv444_to_bl16(uint8_t *dst_uv, size_t uv_avail,
+                                  const uint8_t *src_u, const uint8_t *src_v,
+                                  uint32_t src_pitch, uint32_t w, uint32_t h,
+                                  uint32_t uv_pitch, uint32_t ah, int is_10b)
+{
+    uint32_t width_in_gobs = uv_pitch >> 6;
+    uint32_t n_gob_y       = ah >> 3;
+    if (width_in_gobs == 0U || n_gob_y == 0U) {
+        return;
+    }
+
+    for (uint32_t gob_y = 0U; gob_y < n_gob_y; gob_y++) {
+        uint32_t by_blk      = gob_y >> 1;
+        uint32_t by_in       = gob_y & 1U;
+        size_t   row_gob_idx = (size_t)by_blk * (size_t)width_in_gobs * 2U + (size_t)by_in;
+        for (uint32_t y_in = 0U; y_in < 8U; y_in++) {
+            uint32_t y          = (gob_y << 3) | y_in;
+            uint32_t sy         = (y < h) ? y : (h - 1U);
+            uint32_t row_in_gob = (((y_in >> 2) & 1U) << 7) | ((y_in & 3U) << 4);
+
+            if (is_10b) {
+                const uint16_t *su16 = (const uint16_t *)(src_u + (size_t)sy * src_pitch);
+                const uint16_t *sv16 = (const uint16_t *)(src_v + (size_t)sy * src_pitch);
+                uint32_t last_uv     = (uint32_t)su16[w - 1U] | ((uint32_t)sv16[w - 1U] << 16);
+                uint32_t full_gobs   = w >> 4; /* 16 pixels * 4 B = 64 B */
+                if (full_gobs > width_in_gobs) {
+                    full_gobs = width_in_gobs;
+                }
+                for (uint32_t gx = 0U; gx < full_gobs; gx++) {
+                    uint32_t buf[16];
+                    uint32_t x0 = gx << 4;
+                    for (uint32_t k = 0U; k < 16U; k++) {
+                        buf[k] = (uint32_t)su16[x0 + k] | ((uint32_t)sv16[x0 + k] << 16);
+                    }
+                    size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                    if (g_off + 512U <= uv_avail) {
+                        bl16_store_gob_row64(dst_uv + g_off, row_in_gob, (const uint8_t *)buf);
+                    }
+                }
+                for (uint32_t gx = full_gobs; gx < width_in_gobs; gx++) {
+                    uint32_t buf[16];
+                    uint32_t x0 = gx << 4;
+                    for (uint32_t k = 0U; k < 16U; k++) {
+                        uint32_t x = x0 + k;
+                        buf[k] = (x < w) ? ((uint32_t)su16[x] | ((uint32_t)sv16[x] << 16)) : last_uv;
+                    }
+                    size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                    if (g_off + 512U <= uv_avail) {
+                        bl16_store_gob_row64(dst_uv + g_off, row_in_gob, (const uint8_t *)buf);
+                    }
+                }
+            } else {
+                const uint8_t *su8 = src_u + (size_t)sy * src_pitch;
+                const uint8_t *sv8 = src_v + (size_t)sy * src_pitch;
+                uint16_t last_uv   = (uint16_t)su8[w - 1U] | ((uint16_t)sv8[w - 1U] << 8);
+                uint32_t full_gobs = w >> 5; /* 32 pixels * 2 B = 64 B */
+                if (full_gobs > width_in_gobs) {
+                    full_gobs = width_in_gobs;
+                }
+                for (uint32_t gx = 0U; gx < full_gobs; gx++) {
+                    uint16_t buf[32];
+                    uint32_t x0 = gx << 5;
+                    for (uint32_t k = 0U; k < 32U; k++) {
+                        buf[k] = (uint16_t)su8[x0 + k] | ((uint16_t)sv8[x0 + k] << 8);
+                    }
+                    size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                    if (g_off + 512U <= uv_avail) {
+                        bl16_store_gob_row64(dst_uv + g_off, row_in_gob, (const uint8_t *)buf);
+                    }
+                }
+                for (uint32_t gx = full_gobs; gx < width_in_gobs; gx++) {
+                    uint16_t buf[32];
+                    uint32_t x0 = gx << 5;
+                    for (uint32_t k = 0U; k < 32U; k++) {
+                        uint32_t x = x0 + k;
+                        buf[k] = (x < w) ? ((uint16_t)su8[x] | ((uint16_t)sv8[x] << 8)) : last_uv;
+                    }
+                    size_t g_off = (row_gob_idx + (size_t)gx * 2U) * 512U;
+                    if (g_off + 512U <= uv_avail) {
+                        bl16_store_gob_row64(dst_uv + g_off, row_in_gob, (const uint8_t *)buf);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static inline void argb_convert_px(const uint8_t *srow, uint32_t x,
+                                   int is_argb, int is_rgb10,
+                                   int use_bt601, int full_range,
+                                   uint16_t *out_y10, uint16_t *out_u10, uint16_t *out_v10)
+{
+    int r10, g10, b10;
+    if (is_rgb10) {
+        uint32_t p32;
+        memcpy(&p32, srow + (size_t)x * 4U, sizeof(p32));
+        if (is_argb) {
+            r10 = (int)((p32 >> 20) & 0x3ffU);
+            g10 = (int)((p32 >> 10) & 0x3ffU);
+            b10 = (int)(p32 & 0x3ffU);
+        } else {
+            b10 = (int)((p32 >> 20) & 0x3ffU);
+            g10 = (int)((p32 >> 10) & 0x3ffU);
+            r10 = (int)(p32 & 0x3ffU);
+        }
+    } else {
+        const uint8_t *px = srow + (size_t)x * 4U;
+        r10 = (int)(is_argb ? px[2] : px[0]) << 2;
+        g10 = (int)px[1] << 2;
+        b10 = (int)(is_argb ? px[0] : px[2]) << 2;
+    }
+
+    int yy, uu, vv;
+    if (use_bt601) {
+        if (full_range) {
+            yy = ((77 * r10 + 150 * g10 + 29 * b10 + 128) >> 8);
+            uu = ((-43 * r10 - 85 * g10 + 128 * b10 + 128) >> 8) + 512;
+            vv = ((128 * r10 - 107 * g10 - 21 * b10 + 128) >> 8) + 512;
+        } else {
+            yy = ((66 * r10 + 129 * g10 + 25 * b10 + 128) >> 8) + 64;
+            uu = ((-38 * r10 - 74 * g10 + 112 * b10 + 128) >> 8) + 512;
+            vv = ((112 * r10 - 94 * g10 - 18 * b10 + 128) >> 8) + 512;
+        }
+    } else {
+        if (full_range) {
+            yy = ((54 * r10 + 183 * g10 + 19 * b10 + 128) >> 8);
+            uu = ((-29 * r10 - 99 * g10 + 128 * b10 + 128) >> 8) + 512;
+            vv = ((128 * r10 - 116 * g10 - 12 * b10 + 128) >> 8) + 512;
+        } else {
+            yy = ((47 * r10 + 157 * g10 + 16 * b10 + 128) >> 8) + 64;
+            uu = ((-26 * r10 - 86 * g10 + 112 * b10 + 128) >> 8) + 512;
+            vv = ((112 * r10 - 102 * g10 - 10 * b10 + 128) >> 8) + 512;
+        }
+    }
+    *out_y10 = (uint16_t)(yy < 0 ? 0 : (yy > 1023 ? 1023 : yy)) << 6;
+    *out_u10 = (uint16_t)(uu < 0 ? 0 : (uu > 1023 ? 1023 : uu)) << 6;
+    *out_v10 = (uint16_t)(vv < 0 ? 0 : (vv > 1023 ? 1023 : vv)) << 6;
+}
+
 static inline uint8_t clamp_u8(int v)
 {
-    return (uint8_t)((v < 0) ? 0 : ((v > 255) ? 255 : v));
+    return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+static void copy_argb_to_bl16(open_nvenc_hw_ctx_t *ctx, uint8_t *dst,
+                              const uint8_t *src, uint32_t src_pitch,
+                              NV_ENC_BUFFER_FORMAT fmt)
+{
+    uint32_t w          = ctx->cfg.width;
+    uint32_t h          = ctx->cfg.height;
+    uint32_t ah         = ctx->aligned_h;
+    uint32_t dst_pitch  = ctx->surface_pitch;
+    uint8_t *dst_uv     = dst + (size_t)dst_pitch * (size_t)ah;
+    size_t   uv_avail   = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
+    uint32_t uv_pitch   = (ctx->cfg.chroma_format_idc == 3U) ? (dst_pitch * 2U) : dst_pitch;
+    int      is_444     = (ctx->cfg.chroma_format_idc == 3U);
+    int      is_10b     = (ctx->cfg.bit_depth == 10U);
+    int      is_argb    = (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ARGB10);
+    int      is_rgb10   = (fmt == NV_ENC_BUFFER_FORMAT_ARGB10 || fmt == NV_ENC_BUFFER_FORMAT_ABGR10);
+    int      use_bt601  = (ctx->cfg.vui_matrix_coeffs == 5U || ctx->cfg.vui_matrix_coeffs == 6U) ? 1 : 0;
+    int      full_range = ctx->cfg.vui_full_range ? 1 : 0;
+
+    uint32_t y_gobs     = dst_pitch >> 6;
+    uint32_t uv_gobs    = uv_pitch >> 6;
+    uint32_t n_gob_y    = ah >> 3;
+
+    if (!is_10b && !is_rgb10) {
+        const uint32_t r_off = is_argb ? 2U : 0U;
+        const uint32_t b_off = is_argb ? 0U : 2U;
+        int cy0, cy1, cy2, cy_off;
+        int cu0, cu1, cu2, cu_off;
+        int cv0, cv1, cv2, cv_off;
+        if (use_bt601) {
+            if (full_range) {
+                cy0 =  77; cy1 =  150; cy2 =  29; cy_off = 0;
+                cu0 = -43; cu1 =  -85; cu2 = 128; cu_off = 128;
+                cv0 = 128; cv1 = -107; cv2 = -21; cv_off = 128;
+            } else {
+                cy0 =  66; cy1 = 129; cy2 =  25; cy_off = 16;
+                cu0 = -38; cu1 = -74; cu2 = 112; cu_off = 128;
+                cv0 = 112; cv1 = -94; cv2 = -18; cv_off = 128;
+            }
+        } else {
+            if (full_range) {
+                cy0 =  54; cy1 =  183; cy2 =  19; cy_off = 0;
+                cu0 = -29; cu1 =  -99; cu2 = 128; cu_off = 128;
+                cv0 = 128; cv1 = -116; cv2 = -12; cv_off = 128;
+            } else {
+                cy0 =  47; cy1 =  157; cy2 =  16; cy_off = 16;
+                cu0 = -26; cu1 =  -86; cu2 = 112; cu_off = 128;
+                cv0 = 112; cv1 = -102; cv2 = -10; cv_off = 128;
+            }
+        }
+        uint32_t full_gobs = w >> 6;
+        if (full_gobs > y_gobs) {
+            full_gobs = y_gobs;
+        }
+
+        for (uint32_t gob_y = 0U; gob_y < n_gob_y; gob_y++) {
+            uint32_t by_blk     = gob_y >> 1;
+            uint32_t by_in      = gob_y & 1U;
+            size_t   y_gob_base = (size_t)by_blk * (size_t)y_gobs * 2U + (size_t)by_in;
+            size_t   uv444_base = (size_t)by_blk * (size_t)uv_gobs * 2U + (size_t)by_in;
+            for (uint32_t y_in = 0U; y_in < 8U; y_in++) {
+                uint32_t y          = (gob_y << 3) | y_in;
+                uint32_t sy         = (y < h) ? y : (h - 1U);
+                const uint8_t *srow = src + (size_t)sy * src_pitch;
+                uint32_t y_row_in   = (((y_in >> 2) & 1U) << 7) | ((y_in & 3U) << 4);
+                int      do_nv12_uv = (!is_444 && (y & 1U) == 0U);
+                size_t   nv12_gbase = 0U;
+                uint32_t nv12_rowin = 0U;
+                if (do_nv12_uv) {
+                    uint32_t uvy    = y >> 1;
+                    uint32_t uv_gy  = uvy >> 3;
+                    uint32_t uv_yin = uvy & 7U;
+                    nv12_rowin = (((uv_yin >> 2) & 1U) << 7) | ((uv_yin & 3U) << 4);
+                    nv12_gbase = (size_t)(uv_gy >> 1) * (size_t)uv_gobs * 2U + (size_t)(uv_gy & 1U);
+                }
+
+                for (uint32_t gx = 0U; gx < full_gobs; gx++) {
+                    uint8_t        yb[64];
+                    uint16_t       ub[32], vb[32];
+                    const uint8_t *gp = srow + ((size_t)gx << 8);
+                    if (is_444) {
+                        for (uint32_t k = 0U; k < 32U; k++) {
+                            const uint8_t *p = gp + (size_t)k * 4U;
+                            int r = p[r_off], g = p[1], b = p[b_off];
+                            yb[k] = clamp_u8(((cy0 * r + cy1 * g + cy2 * b + 128) >> 8) + cy_off);
+                            uint8_t u8 = clamp_u8(((cu0 * r + cu1 * g + cu2 * b + 128) >> 8) + cu_off);
+                            uint8_t v8 = clamp_u8(((cv0 * r + cv1 * g + cv2 * b + 128) >> 8) + cv_off);
+                            ub[k] = (uint16_t)u8 | ((uint16_t)v8 << 8);
+                        }
+                        for (uint32_t k = 0U; k < 32U; k++) {
+                            const uint8_t *p = gp + (size_t)(32U + k) * 4U;
+                            int r = p[r_off], g = p[1], b = p[b_off];
+                            yb[32U + k] = clamp_u8(((cy0 * r + cy1 * g + cy2 * b + 128) >> 8) + cy_off);
+                            uint8_t u8 = clamp_u8(((cu0 * r + cu1 * g + cu2 * b + 128) >> 8) + cu_off);
+                            uint8_t v8 = clamp_u8(((cv0 * r + cv1 * g + cv2 * b + 128) >> 8) + cv_off);
+                            vb[k] = (uint16_t)u8 | ((uint16_t)v8 << 8);
+                        }
+                    } else {
+                        for (uint32_t k = 0U; k < 64U; k++) {
+                            const uint8_t *p = gp + (size_t)k * 4U;
+                            int r = p[r_off], g = p[1], b = p[b_off];
+                            yb[k] = clamp_u8(((cy0 * r + cy1 * g + cy2 * b + 128) >> 8) + cy_off);
+                        }
+                        if (do_nv12_uv) {
+                            for (uint32_t k = 0U; k < 32U; k++) {
+                                const uint8_t *p = gp + (size_t)k * 8U;
+                                int r = p[r_off], g = p[1], b = p[b_off];
+                                uint8_t u8 = clamp_u8(((cu0 * r + cu1 * g + cu2 * b + 128) >> 8) + cu_off);
+                                uint8_t v8 = clamp_u8(((cv0 * r + cv1 * g + cv2 * b + 128) >> 8) + cv_off);
+                                ub[k] = (uint16_t)u8 | ((uint16_t)v8 << 8);
+                            }
+                        }
+                    }
+                    size_t goff = (y_gob_base + (size_t)gx * 2U) * 512U;
+                    if (goff + 512U <= ctx->surface_size) {
+                        bl16_store_gob_row64(dst + goff, y_row_in, yb);
+                    }
+                    if (is_444) {
+                        size_t o0 = (uv444_base + (size_t)(gx * 2U + 0U) * 2U) * 512U;
+                        size_t o1 = (uv444_base + (size_t)(gx * 2U + 1U) * 2U) * 512U;
+                        if (o0 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o0, y_row_in, (const uint8_t *)ub);
+                        }
+                        if (o1 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o1, y_row_in, (const uint8_t *)vb);
+                        }
+                    } else if (do_nv12_uv) {
+                        size_t o = (nv12_gbase + (size_t)gx * 2U) * 512U;
+                        if (o + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o, nv12_rowin, (const uint8_t *)ub);
+                        }
+                    }
+                }
+
+                if (full_gobs < y_gobs) {
+                    const uint8_t *lp = srow + (size_t)(w - 1U) * 4U;
+                    int lr = lp[r_off], lg = lp[1], lb_ = lp[b_off];
+                    uint8_t last_y8 = clamp_u8(((cy0 * lr + cy1 * lg + cy2 * lb_ + 128) >> 8) + cy_off);
+                    uint8_t last_u8 = clamp_u8(((cu0 * lr + cu1 * lg + cu2 * lb_ + 128) >> 8) + cu_off);
+                    uint8_t last_v8 = clamp_u8(((cv0 * lr + cv1 * lg + cv2 * lb_ + 128) >> 8) + cv_off);
+                    uint16_t last_uv8 = (uint16_t)last_u8 | ((uint16_t)last_v8 << 8);
+
+                    for (uint32_t gx = full_gobs; gx < y_gobs; gx++) {
+                        uint8_t  yb[64];
+                        uint16_t ub[32], vb[32];
+                        uint32_t x0 = gx << 6;
+                        for (uint32_t k = 0U; k < 64U; k++) {
+                            uint32_t x = x0 + k;
+                            uint8_t  y8 = last_y8, u8 = last_u8, v8 = last_v8;
+                            if (x < w) {
+                                const uint8_t *p = srow + (size_t)x * 4U;
+                                int r = p[r_off], g = p[1], b = p[b_off];
+                                y8 = clamp_u8(((cy0 * r + cy1 * g + cy2 * b + 128) >> 8) + cy_off);
+                                u8 = clamp_u8(((cu0 * r + cu1 * g + cu2 * b + 128) >> 8) + cu_off);
+                                v8 = clamp_u8(((cv0 * r + cv1 * g + cv2 * b + 128) >> 8) + cv_off);
+                            }
+                            yb[k] = y8;
+                            if (is_444) {
+                                uint16_t uv_val = (uint16_t)u8 | ((uint16_t)v8 << 8);
+                                if (k < 32U) {
+                                    ub[k] = uv_val;
+                                } else {
+                                    vb[k - 32U] = uv_val;
+                                }
+                            } else if (do_nv12_uv && (k & 1U) == 0U) {
+                                ub[k >> 1] = (uint16_t)u8 | ((uint16_t)v8 << 8);
+                            }
+                        }
+                        (void)last_uv8;
+                        size_t goff = (y_gob_base + (size_t)gx * 2U) * 512U;
+                        if (goff + 512U <= ctx->surface_size) {
+                            bl16_store_gob_row64(dst + goff, y_row_in, yb);
+                        }
+                        if (is_444) {
+                            size_t o0 = (uv444_base + (size_t)(gx * 2U + 0U) * 2U) * 512U;
+                            size_t o1 = (uv444_base + (size_t)(gx * 2U + 1U) * 2U) * 512U;
+                            if (o0 + 512U <= uv_avail) {
+                                bl16_store_gob_row64(dst_uv + o0, y_row_in, (const uint8_t *)ub);
+                            }
+                            if (o1 + 512U <= uv_avail) {
+                                bl16_store_gob_row64(dst_uv + o1, y_row_in, (const uint8_t *)vb);
+                            }
+                        } else if (do_nv12_uv) {
+                            size_t o = (nv12_gbase + (size_t)gx * 2U) * 512U;
+                            if (o + 512U <= uv_avail) {
+                                bl16_store_gob_row64(dst_uv + o, nv12_rowin, (const uint8_t *)ub);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    for (uint32_t gob_y = 0U; gob_y < n_gob_y; gob_y++) {
+        uint32_t by_blk      = gob_y >> 1;
+        uint32_t by_in       = gob_y & 1U;
+        size_t   y_gob_base  = (size_t)by_blk * (size_t)y_gobs * 2U + (size_t)by_in;
+        for (uint32_t y_in = 0U; y_in < 8U; y_in++) {
+            uint32_t y          = (gob_y << 3) | y_in;
+            uint32_t sy         = (y < h) ? y : (h - 1U);
+            const uint8_t *srow = src + (size_t)sy * src_pitch;
+            uint32_t y_row_in   = (((y_in >> 2) & 1U) << 7) | ((y_in & 3U) << 4);
+
+            uint16_t last_y, last_u, last_v;
+            argb_convert_px(srow, w - 1U, is_argb, is_rgb10, use_bt601, full_range,
+                            &last_y, &last_u, &last_v);
+
+            if (is_10b) {
+                for (uint32_t gx = 0U; gx < y_gobs; gx++) {
+                    uint16_t yb[32];
+                    uint32_t ub[16], vb[16];
+                    uint32_t x0 = gx << 5;
+                    for (uint32_t k = 0U; k < 32U; k++) {
+                        uint32_t x = x0 + k;
+                        uint16_t y10 = last_y, u10 = last_u, v10 = last_v;
+                        if (x < w) {
+                            argb_convert_px(srow, x, is_argb, is_rgb10, use_bt601, full_range,
+                                            &y10, &u10, &v10);
+                        }
+                        yb[k] = y10;
+                        if (is_444) {
+                            uint32_t uv_val = (uint32_t)u10 | ((uint32_t)v10 << 16);
+                            if (k < 16U) {
+                                ub[k] = uv_val;
+                            } else {
+                                vb[k - 16U] = uv_val;
+                            }
+                        } else if ((y & 1U) == 0U && (k & 1U) == 0U) {
+                            ub[k >> 1] = (uint32_t)u10 | ((uint32_t)v10 << 16);
+                        }
+                    }
+                    size_t goff = (y_gob_base + (size_t)gx * 2U) * 512U;
+                    if (goff + 512U <= ctx->surface_size) {
+                        bl16_store_gob_row64(dst + goff, y_row_in, (const uint8_t *)yb);
+                    }
+                    if (is_444) {
+                        size_t g0 = (size_t)by_blk * (size_t)uv_gobs * 2U + (size_t)by_in;
+                        size_t o0 = (g0 + (size_t)(gx * 2U + 0U) * 2U) * 512U;
+                        size_t o1 = (g0 + (size_t)(gx * 2U + 1U) * 2U) * 512U;
+                        if (o0 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o0, y_row_in, (const uint8_t *)ub);
+                        }
+                        if (o1 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o1, y_row_in, (const uint8_t *)vb);
+                        }
+                    } else if ((y & 1U) == 0U) {
+                        uint32_t uvy        = y >> 1;
+                        uint32_t uv_gy      = uvy >> 3;
+                        uint32_t uv_yin     = uvy & 7U;
+                        uint32_t uv_row_in  = (((uv_yin >> 2) & 1U) << 7) | ((uv_yin & 3U) << 4);
+                        size_t   uv_gob_idx = (size_t)(uv_gy >> 1) * (size_t)uv_gobs * 2U + (size_t)(uv_gy & 1U);
+                        size_t   o          = (uv_gob_idx + (size_t)gx * 2U) * 512U;
+                        if (o + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o, uv_row_in, (const uint8_t *)ub);
+                        }
+                    }
+                }
+            } else {
+                for (uint32_t gx = 0U; gx < y_gobs; gx++) {
+                    uint8_t  yb[64];
+                    uint16_t ub[32], vb[32];
+                    uint32_t x0 = gx << 6;
+                    for (uint32_t k = 0U; k < 64U; k++) {
+                        uint32_t x = x0 + k;
+                        uint16_t y10 = last_y, u10 = last_u, v10 = last_v;
+                        if (x < w) {
+                            argb_convert_px(srow, x, is_argb, is_rgb10, use_bt601, full_range,
+                                            &y10, &u10, &v10);
+                        }
+                        yb[k] = (uint8_t)(y10 >> 8);
+                        if (is_444) {
+                            uint16_t uv_val = (uint16_t)(u10 >> 8) | ((uint16_t)(v10 >> 8) << 8);
+                            if (k < 32U) {
+                                ub[k] = uv_val;
+                            } else {
+                                vb[k - 32U] = uv_val;
+                            }
+                        } else if ((y & 1U) == 0U && (k & 1U) == 0U) {
+                            ub[k >> 1] = (uint16_t)(u10 >> 8) | ((uint16_t)(v10 >> 8) << 8);
+                        }
+                    }
+                    size_t goff = (y_gob_base + (size_t)gx * 2U) * 512U;
+                    if (goff + 512U <= ctx->surface_size) {
+                        bl16_store_gob_row64(dst + goff, y_row_in, yb);
+                    }
+                    if (is_444) {
+                        size_t g0 = (size_t)by_blk * (size_t)uv_gobs * 2U + (size_t)by_in;
+                        size_t o0 = (g0 + (size_t)(gx * 2U + 0U) * 2U) * 512U;
+                        size_t o1 = (g0 + (size_t)(gx * 2U + 1U) * 2U) * 512U;
+                        if (o0 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o0, y_row_in, (const uint8_t *)ub);
+                        }
+                        if (o1 + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o1, y_row_in, (const uint8_t *)vb);
+                        }
+                    } else if ((y & 1U) == 0U) {
+                        uint32_t uvy        = y >> 1;
+                        uint32_t uv_gy      = uvy >> 3;
+                        uint32_t uv_yin     = uvy & 7U;
+                        uint32_t uv_row_in  = (((uv_yin >> 2) & 1U) << 7) | ((uv_yin & 3U) << 4);
+                        size_t   uv_gob_idx = (size_t)(uv_gy >> 1) * (size_t)uv_gobs * 2U + (size_t)(uv_gy & 1U);
+                        size_t   o          = (uv_gob_idx + (size_t)gx * 2U) * 512U;
+                        if (o + 512U <= uv_avail) {
+                            bl16_store_gob_row64(dst_uv + o, uv_row_in, (const uint8_t *)ub);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
@@ -1775,7 +2331,7 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                                 NV_ENC_BUFFER_FORMAT fmt,
                                 const uint32_t chroma_offset[2])
 {
-    uint8_t *dst       = (uint8_t *)ctx->input_buf.cpu;
+    uint8_t *dst       = ctx->stage_buf ? ctx->stage_buf : (uint8_t *)ctx->input_buf.cpu;
     uint32_t w         = ctx->cfg.width;
     uint32_t h         = ctx->cfg.height;
     uint32_t ah        = ctx->aligned_h;
@@ -1785,151 +2341,37 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
     uint32_t bpp       = is_10b ? 2U : 1U;
     uint32_t row_bytes = w * bpp;
 
-    if (!src || src_pitch == 0U) {
+    if (!src || src_pitch == 0U || w == 0U || h == 0U) {
         return;
     }
 
-    memset(dst, 0, ctx->surface_size);
-
     if (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ABGR ||
         fmt == NV_ENC_BUFFER_FORMAT_ARGB10 || fmt == NV_ENC_BUFFER_FORMAT_ABGR10) {
-        uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
-        size_t   uv_avail = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
-        uint32_t uv_pitch = is_444 ? (dst_pitch * 2U) : dst_pitch;
-        int      is_argb  = (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ARGB10);
-        int      is_rgb10 = (fmt == NV_ENC_BUFFER_FORMAT_ARGB10 || fmt == NV_ENC_BUFFER_FORMAT_ABGR10);
-
-        for (uint32_t y = 0U; y < ah; y++) {
-            uint32_t sy = (y < h) ? y : (h - 1U);
-            const uint8_t *srow = src + (size_t)sy * src_pitch;
-            for (uint32_t x = 0U; x < w; x++) {
-                int r10, g10, b10;
-                if (is_rgb10) {
-                    uint32_t p32;
-                    memcpy(&p32, srow + (size_t)x * 4U, sizeof(p32));
-                    if (is_argb) {
-                        r10 = (int)((p32 >> 20) & 0x3ffU);
-                        g10 = (int)((p32 >> 10) & 0x3ffU);
-                        b10 = (int)(p32 & 0x3ffU);
-                    } else {
-                        b10 = (int)((p32 >> 20) & 0x3ffU);
-                        g10 = (int)((p32 >> 10) & 0x3ffU);
-                        r10 = (int)(p32 & 0x3ffU);
-                    }
-                } else {
-                    const uint8_t *px = srow + (size_t)x * 4U;
-                    r10 = (int)(is_argb ? px[2] : px[0]) << 2;
-                    g10 = (int)px[1] << 2;
-                    b10 = (int)(is_argb ? px[0] : px[2]) << 2;
-                }
-                int yy = ((47 * r10 + 157 * g10 + 16 * b10 + 512) >> 8) + 64;
-                int uu = ((-26 * r10 - 86 * g10 + 112 * b10 + 512) >> 8) + 512;
-                int vv = ((112 * r10 - 102 * g10 - 10 * b10 + 512) >> 8) + 512;
-                uint16_t y10 = (uint16_t)(yy < 0 ? 0 : (yy > 1023 ? 1023 : yy)) << 6;
-                uint16_t u10 = (uint16_t)(uu < 0 ? 0 : (uu > 1023 ? 1023 : uu)) << 6;
-                uint16_t v10 = (uint16_t)(vv < 0 ? 0 : (vv > 1023 ? 1023 : vv)) << 6;
-
-                if (is_10b) {
-                    size_t off = gob_bl_offset(x * 2U, y, dst_pitch);
-                    if (off + 1U < ctx->surface_size) {
-                        dst[off]      = (uint8_t)(y10 & 0xffU);
-                        dst[off + 1U] = (uint8_t)(y10 >> 8);
-                    }
-                    if (is_444) {
-                        size_t off_u = gob_bl_offset(x * 4U, y, uv_pitch);
-                        size_t off_v = gob_bl_offset(x * 4U + 2U, y, uv_pitch);
-                        if (off_u + 1U < uv_avail) {
-                            dst_uv[off_u]      = (uint8_t)(u10 & 0xffU);
-                            dst_uv[off_u + 1U] = (uint8_t)(u10 >> 8);
-                        }
-                        if (off_v + 1U < uv_avail) {
-                            dst_uv[off_v]      = (uint8_t)(v10 & 0xffU);
-                            dst_uv[off_v + 1U] = (uint8_t)(v10 >> 8);
-                        }
-                    } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
-                        size_t off_u = gob_bl_offset(x * 2U, y >> 1, uv_pitch);
-                        size_t off_v = gob_bl_offset(x * 2U + 2U, y >> 1, uv_pitch);
-                        if (off_u + 1U < uv_avail) {
-                            dst_uv[off_u]      = (uint8_t)(u10 & 0xffU);
-                            dst_uv[off_u + 1U] = (uint8_t)(u10 >> 8);
-                        }
-                        if (off_v + 1U < uv_avail) {
-                            dst_uv[off_v]      = (uint8_t)(v10 & 0xffU);
-                            dst_uv[off_v + 1U] = (uint8_t)(v10 >> 8);
-                        }
-                    }
-                } else {
-                    size_t off = gob_bl_offset(x, y, dst_pitch);
-                    if (off < ctx->surface_size) {
-                        dst[off] = (uint8_t)(y10 >> 8);
-                    }
-                    if (is_444) {
-                        size_t off_u = gob_bl_offset(x * 2U, y, uv_pitch);
-                        size_t off_v = gob_bl_offset(x * 2U + 1U, y, uv_pitch);
-                        if (off_u < uv_avail) {
-                            dst_uv[off_u] = (uint8_t)(u10 >> 8);
-                        }
-                        if (off_v < uv_avail) {
-                            dst_uv[off_v] = (uint8_t)(v10 >> 8);
-                        }
-                    } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
-                        size_t off_u = gob_bl_offset(x, y >> 1, uv_pitch);
-                        size_t off_v = gob_bl_offset(x + 1U, y >> 1, uv_pitch);
-                        if (off_u < uv_avail) {
-                            dst_uv[off_u] = (uint8_t)(u10 >> 8);
-                        }
-                        if (off_v < uv_avail) {
-                            dst_uv[off_v] = (uint8_t)(v10 >> 8);
-                        }
-                    }
-                }
-            }
+        copy_argb_to_bl16(ctx, dst, src, src_pitch, fmt);
+        if (ctx->stage_buf) {
+            memcpy(ctx->input_buf.cpu, ctx->stage_buf, ctx->surface_size);
         }
         return;
     }
 
     /* Plane 0 (Luma Y in Pascal 16Bx2 block-linear) */
     uint32_t copy_y_bytes = (row_bytes <= src_pitch && row_bytes <= dst_pitch) ? row_bytes : dst_pitch;
-    for (uint32_t y = 0U; y < ah; y++) {
-        uint32_t sy = (y < h) ? y : (h - 1U);
-        const uint8_t *srow = src + (size_t)sy * src_pitch;
-        for (uint32_t xb = 0U; xb < copy_y_bytes; xb++) {
-            size_t off = gob_bl_offset(xb, y, dst_pitch);
-            if (off < ctx->surface_size) {
-                dst[off] = srow[xb];
-            }
-        }
-    }
+    swizzle_plane_linear_to_bl16(dst, ctx->surface_size, src, src_pitch,
+                                 copy_y_bytes, bpp, h, dst_pitch, ah);
 
     if (is_444) {
         /* Interleaved (U, V) semi-planar chroma plane at +dst_pitch*ah, UV pitch = 2 * dst_pitch */
-        uint8_t *dst_uv    = dst + (size_t)dst_pitch * (size_t)ah;
-        size_t   uv_avail  = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
-        uint32_t uv_pitch  = dst_pitch * 2U;
+        uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
+        size_t   uv_avail = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
+        uint32_t uv_pitch = dst_pitch * 2U;
         const uint8_t *src_u = (chroma_offset && chroma_offset[0] > 0U)
                                    ? (src + chroma_offset[0])
                                    : (src + (size_t)src_pitch * (size_t)h);
         const uint8_t *src_v = (chroma_offset && chroma_offset[1] > 0U)
                                    ? (src + chroma_offset[1])
                                    : (src_u + (size_t)src_pitch * (size_t)h);
-        for (uint32_t y = 0U; y < ah; y++) {
-            uint32_t sy = (y < h) ? y : (h - 1U);
-            const uint8_t *su = src_u + (size_t)sy * src_pitch;
-            const uint8_t *sv = src_v + (size_t)sy * src_pitch;
-            for (uint32_t x = 0U; x < w; x++) {
-                uint32_t xb = x * bpp * 2U;
-                for (uint32_t k = 0U; k < bpp; k++) {
-                    size_t off_u = gob_bl_offset(xb + k, y, uv_pitch);
-                    size_t off_v = gob_bl_offset(xb + bpp + k, y, uv_pitch);
-                    if (off_u < uv_avail) {
-                        dst_uv[off_u] = su[(size_t)x * bpp + k];
-                    }
-                    if (off_v < uv_avail) {
-                        dst_uv[off_v] = sv[(size_t)x * bpp + k];
-                    }
-                }
-            }
-        }
+        swizzle_uv444_to_bl16(dst_uv, uv_avail, src_u, src_v, src_pitch,
+                              w, h, uv_pitch, ah, is_10b);
     } else {
         /* Semi-planar 4:2:0 NV12 / P010: Y + interleaved UV in Pascal 16Bx2 block-linear */
         uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
@@ -1946,34 +2388,19 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                                     : (p1 + (size_t)cp * (size_t)uv_h);
             const uint8_t *su = (fmt == NV_ENC_BUFFER_FORMAT_IYUV) ? p1 : p2;
             const uint8_t *sv = (fmt == NV_ENC_BUFFER_FORMAT_IYUV) ? p2 : p1;
-            for (uint32_t y = 0U; y < uv_ah; y++) {
-                uint32_t sy = (y < uv_h) ? y : (uv_h - 1U);
-                for (uint32_t x = 0U; x < w / 2U; x++) {
-                    size_t off_u = gob_bl_offset(x * 2U, y, dst_pitch);
-                    size_t off_v = gob_bl_offset(x * 2U + 1U, y, dst_pitch);
-                    if (off_u < uv_avail) {
-                        dst_uv[off_u] = su[(size_t)sy * cp + x];
-                    }
-                    if (off_v < uv_avail) {
-                        dst_uv[off_v] = sv[(size_t)sy * cp + x];
-                    }
-                }
-            }
+            swizzle_uv444_to_bl16(dst_uv, uv_avail, su, sv, cp,
+                                  w / 2U, uv_h, dst_pitch, uv_ah, 0);
         } else {
             const uint8_t *src_uv = (chroma_offset && chroma_offset[0] > 0U)
                                         ? (src + chroma_offset[0])
                                         : (src + (size_t)src_pitch * (size_t)h);
-            for (uint32_t y = 0U; y < uv_ah; y++) {
-                uint32_t sy = (y < uv_h) ? y : (uv_h - 1U);
-                const uint8_t *srow = src_uv + (size_t)sy * src_pitch;
-                for (uint32_t xb = 0U; xb < copy_y_bytes; xb++) {
-                    size_t off = gob_bl_offset(xb, y, dst_pitch);
-                    if (off < uv_avail) {
-                        dst_uv[off] = srow[xb];
-                    }
-                }
-            }
+            swizzle_plane_linear_to_bl16(dst_uv, uv_avail, src_uv, src_pitch,
+                                         copy_y_bytes, bpp * 2U, uv_h, dst_pitch, uv_ah);
         }
+    }
+
+    if (ctx->stage_buf) {
+        memcpy(ctx->input_buf.cpu, ctx->stage_buf, ctx->surface_size);
     }
 }
 
@@ -2000,11 +2427,15 @@ void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
                               uint32_t vbv_buffer_size,
                               uint32_t fps_num,
                               uint32_t fps_den,
+                              uint32_t min_qp,
+                              uint32_t max_qp,
+                              uint32_t target_quality,
                               int force_idr)
 {
     if (!ctx) {
         return;
     }
+    uint32_t prev_rc         = ctx->cfg.rc_mode;
     ctx->cfg.gop_length      = gop_length;
     ctx->cfg.qp              = qp;
     ctx->cfg.qp_p            = qp_p;
@@ -2014,7 +2445,36 @@ void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
     ctx->cfg.vbv_buffer_size = vbv_buffer_size;
     ctx->cfg.fps_num         = fps_num;
     ctx->cfg.fps_den         = fps_den;
-    rc_init_state(ctx);
+    ctx->cfg.min_qp          = min_qp;
+    ctx->cfg.max_qp          = max_qp;
+    ctx->cfg.target_quality  = target_quality;
+
+    uint32_t target_bps = average_bitrate ? average_bitrate : max_bitrate;
+    if (prev_rc == rc_mode && rc_mode != 0U && target_bps > 0U && ctx->rc_bits_per_frame > 0.0) {
+        double fps = (fps_num > 0U && fps_den > 0U) ? ((double)fps_num / (double)fps_den) : 60.0;
+        if (fps < 1.0) {
+            fps = 60.0;
+        }
+        ctx->rc_bits_per_frame = (double)target_bps / fps;
+        ctx->rc_vbv_size = (vbv_buffer_size > 0U) ? (double)vbv_buffer_size : (double)target_bps;
+        if (ctx->rc_vbv_size < ctx->rc_bits_per_frame * 4.0) {
+            ctx->rc_vbv_size = ctx->rc_bits_per_frame * 4.0;
+        }
+        if (ctx->rc_vbv_level > ctx->rc_vbv_size) {
+            ctx->rc_vbv_level = ctx->rc_vbv_size * 0.5;
+        }
+        uint32_t lo = (min_qp > 0U && min_qp <= 51U) ? min_qp : 10U;
+        uint32_t hi = (max_qp > lo && max_qp <= 51U) ? max_qp : 46U;
+        if (ctx->rc_cur_qp < lo) {
+            ctx->rc_cur_qp = lo;
+        }
+        if (ctx->rc_cur_qp > hi) {
+            ctx->rc_cur_qp = hi;
+        }
+    } else {
+        rc_init_state(ctx);
+    }
+
     if (force_idr) {
         open_nvenc_hw_invalidate_refs(ctx);
     }
@@ -2213,14 +2673,51 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
     /* Emit parameter sets on IDR or OUTPUT_SPSPPS, then 4-byte Annex-B slice */
     size_t hdr_len = 0U;
     if (is_idr || emit_spspps) {
-        hdr_len = ctx->cfg.is_h264
-                      ? open_nvenc_h264_write_headers(out_bs, out_bs_cap,
-                                                      ctx->cfg.width, ctx->cfg.height,
-                                                      ctx->cfg.chroma_format_idc)
-                      : open_nvenc_hevc_write_headers(out_bs, out_bs_cap,
-                                                      ctx->cfg.width, ctx->cfg.height,
-                                                      ctx->cfg.chroma_format_idc,
-                                                      ctx->cfg.bit_depth);
+        if (ctx->cfg.is_h264) {
+            open_nvenc_h264_hdr_params_t hp;
+            memset(&hp, 0, sizeof(hp));
+            hp.width                     = ctx->cfg.width;
+            hp.height                    = ctx->cfg.height;
+            hp.chroma_format_idc         = ctx->cfg.chroma_format_idc;
+            hp.level_idc                 = ctx->cfg.level_idc;
+            hp.fps_num                   = ctx->cfg.fps_num;
+            hp.fps_den                   = ctx->cfg.fps_den;
+            hp.video_signal_type_present = ctx->cfg.vui_video_signal_present;
+            hp.video_format              = ctx->cfg.vui_video_format;
+            hp.video_full_range          = ctx->cfg.vui_full_range;
+            hp.colour_desc_present       = ctx->cfg.vui_colour_desc_present;
+            hp.colour_primaries          = ctx->cfg.vui_colour_primaries;
+            hp.transfer_characteristics  = ctx->cfg.vui_transfer_char;
+            hp.matrix_coeffs             = ctx->cfg.vui_matrix_coeffs;
+            hdr_len = open_nvenc_h264_write_headers_ex(out_bs, out_bs_cap, &hp);
+        } else {
+            open_nvenc_hevc_hdr_params_t ep;
+            memset(&ep, 0, sizeof(ep));
+            ep.width                     = ctx->cfg.width;
+            ep.height                    = ctx->cfg.height;
+            ep.chroma_format_idc         = ctx->cfg.chroma_format_idc;
+            ep.bit_depth                 = ctx->cfg.bit_depth;
+            ep.level_idc                 = ctx->cfg.level_idc;
+            ep.tier                      = ctx->cfg.tier;
+            ep.fps_num                   = ctx->cfg.fps_num;
+            ep.fps_den                   = ctx->cfg.fps_den;
+            ep.overscan_present          = ctx->cfg.vui_overscan_present;
+            ep.overscan_info             = ctx->cfg.vui_overscan_info;
+            ep.video_signal_type_present = ctx->cfg.vui_video_signal_present;
+            ep.video_format              = ctx->cfg.vui_video_format;
+            ep.video_full_range          = ctx->cfg.vui_full_range;
+            ep.colour_desc_present       = ctx->cfg.vui_colour_desc_present;
+            ep.colour_primaries          = ctx->cfg.vui_colour_primaries;
+            ep.transfer_characteristics  = ctx->cfg.vui_transfer_char;
+            ep.matrix_coeffs             = ctx->cfg.vui_matrix_coeffs;
+            ep.chroma_loc_present        = ctx->cfg.vui_chroma_loc_present;
+            ep.chroma_loc_top            = ctx->cfg.vui_chroma_loc_top;
+            ep.chroma_loc_bot            = ctx->cfg.vui_chroma_loc_bot;
+            ep.timing_present            = ctx->cfg.vui_timing_present;
+            ep.num_units_in_tick         = ctx->cfg.vui_num_units_in_tick;
+            ep.time_scale                = ctx->cfg.vui_time_scale;
+            hdr_len = open_nvenc_hevc_write_headers_ex(out_bs, out_bs_cap, &ep);
+        }
         if (hdr_len == 0U) {
             set_err(err_buf, err_cap, "parameter set header generation failed");
             return NV_ENC_ERR_NOT_ENOUGH_BUFFER;

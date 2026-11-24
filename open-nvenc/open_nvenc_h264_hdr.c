@@ -116,33 +116,57 @@ static size_t emit_h264_nal(uint8_t *dst, size_t cap,
     return out;
 }
 
-uint8_t open_nvenc_h264_compute_level_idc(uint32_t width, uint32_t height)
+uint8_t open_nvenc_h264_compute_level_idc_fps(uint32_t width, uint32_t height,
+                                              uint32_t fps_num, uint32_t fps_den)
 {
     uint32_t mb_w = (width + 15U) >> 4;
     uint32_t mb_h = (height + 15U) >> 4;
     uint32_t n_mbs = mb_w * mb_h;
-    if (n_mbs <= 792U) {
-        return 21U; /* 2.1 (up to 400p) */
+    uint32_t fn = (fps_num > 0U) ? fps_num : 30U;
+    uint32_t fd = (fps_den > 0U) ? fps_den : 1U;
+    uint64_t mb_per_sec = ((uint64_t)n_mbs * (uint64_t)fn + (uint64_t)fd - 1ULL) / (uint64_t)fd;
+
+    if (n_mbs <= 792U && mb_per_sec <= 19800ULL) {
+        return 21U; /* 2.1 */
     }
-    if (n_mbs <= 3600U) {
-        return 31U; /* 3.1 (720p) */
+    if (n_mbs <= 3600U && mb_per_sec <= 108000ULL) {
+        return 31U; /* 3.1 (720p30) */
     }
-    if (n_mbs <= 8192U) {
-        return 41U; /* 4.1 (1080p) */
+    if (n_mbs <= 8192U && mb_per_sec <= 245760ULL) {
+        return 41U; /* 4.1 (1080p30) */
     }
-    return 51U;
+    if (n_mbs <= 8704U && mb_per_sec <= 522240ULL) {
+        return 42U; /* 4.2 (1080p60 / 1784x992@60) */
+    }
+    if (n_mbs <= 22080U && mb_per_sec <= 983040ULL) {
+        return 51U; /* 5.1 */
+    }
+    return 52U;     /* 5.2 */
+}
+
+uint8_t open_nvenc_h264_compute_level_idc(uint32_t width, uint32_t height)
+{
+    return open_nvenc_h264_compute_level_idc_fps(width, height, 25U, 1U);
 }
 
 static size_t build_h264_sps_rbsp(uint8_t *rbsp, size_t cap,
-                                  uint32_t width, uint32_t height,
-                                  uint32_t chroma_format_idc)
+                                  const open_nvenc_h264_hdr_params_t *p)
 {
     h264_bitwriter_t bw;
     bw_init(&bw, rbsp, cap);
 
-    uint32_t chroma     = (chroma_format_idc == 3U) ? 3U : 1U;
+    uint32_t width      = p->width;
+    uint32_t height     = p->height;
+    uint32_t chroma     = (p->chroma_format_idc == 3U) ? 3U : 1U;
     uint8_t profile_idc = (chroma == 3U) ? 244U : 77U; /* High 4:4:4 Predictive vs Main */
-    uint8_t level_idc   = open_nvenc_h264_compute_level_idc(width, height);
+    uint8_t auto_lvl    = open_nvenc_h264_compute_level_idc_fps(width, height, p->fps_num, p->fps_den);
+    uint8_t level_idc   = auto_lvl;
+    if (p->level_idc >= 10U && p->level_idc <= 62U) {
+        level_idc = (uint8_t)p->level_idc;
+        if (auto_lvl > level_idc) {
+            level_idc = auto_lvl;
+        }
+    }
     uint8_t constraint  = (chroma == 1U) ? 0x40U : 0x00U; /* constraint_set1_flag for Main */
 
     bw_put_bits(&bw, profile_idc, 8);
@@ -188,7 +212,35 @@ static size_t build_h264_sps_rbsp(uint8_t *rbsp, size_t cap,
         bw_put_bit(&bw, 0U);
     }
 
-    bw_put_bit(&bw, 0U); /* vui_parameters_present_flag = 0 */
+    int has_timing = (p->fps_num > 0U && p->fps_den > 0U) ? 1 : 0;
+    int has_vui = (has_timing || p->video_signal_type_present) ? 1 : 0;
+    bw_put_bit(&bw, has_vui ? 1U : 0U); /* vui_parameters_present_flag */
+    if (has_vui) {
+        bw_put_bit(&bw, 0U); /* aspect_ratio_info_present_flag */
+        bw_put_bit(&bw, 0U); /* overscan_info_present_flag */
+        bw_put_bit(&bw, p->video_signal_type_present ? 1U : 0U); /* video_signal_type_present_flag */
+        if (p->video_signal_type_present) {
+            bw_put_bits(&bw, p->video_format & 7U, 3);
+            bw_put_bit(&bw, p->video_full_range ? 1U : 0U);
+            bw_put_bit(&bw, p->colour_desc_present ? 1U : 0U);
+            if (p->colour_desc_present) {
+                bw_put_bits(&bw, p->colour_primaries & 0xffU, 8);
+                bw_put_bits(&bw, p->transfer_characteristics & 0xffU, 8);
+                bw_put_bits(&bw, p->matrix_coeffs & 0xffU, 8);
+            }
+        }
+        bw_put_bit(&bw, 0U); /* chroma_loc_info_present_flag */
+        bw_put_bit(&bw, has_timing ? 1U : 0U); /* timing_info_present_flag */
+        if (has_timing) {
+            bw_put_bits(&bw, p->fps_den * 1000U, 32); /* num_units_in_tick */
+            bw_put_bits(&bw, p->fps_num * 2000U, 32); /* time_scale (2 * fps) */
+            bw_put_bit(&bw, 0U); /* fixed_frame_rate_flag */
+        }
+        bw_put_bit(&bw, 0U); /* nal_hrd_parameters_present_flag */
+        bw_put_bit(&bw, 0U); /* vcl_hrd_parameters_present_flag */
+        bw_put_bit(&bw, 0U); /* pic_struct_present_flag */
+        bw_put_bit(&bw, 0U); /* bitstream_restriction_flag */
+    }
     bw_rbsp_trailing(&bw);
     return bw.overflow ? 0U : bw.byte_pos;
 }
@@ -223,14 +275,16 @@ static size_t build_h264_pps_rbsp(uint8_t *rbsp, size_t cap, uint32_t chroma_for
     return bw.overflow ? 0U : bw.byte_pos;
 }
 
-size_t open_nvenc_h264_write_headers(uint8_t *out, size_t cap,
-                                     uint32_t width, uint32_t height,
-                                     uint32_t chroma_format_idc)
+size_t open_nvenc_h264_write_headers_ex(uint8_t *out, size_t cap,
+                                        const open_nvenc_h264_hdr_params_t *p)
 {
-    uint8_t rbsp[128];
+    if (!out || !p || cap < 32U || p->width < 16U || p->height < 16U) {
+        return 0U;
+    }
+    uint8_t rbsp[256];
     size_t pos = 0U;
 
-    size_t rlen = build_h264_sps_rbsp(rbsp, sizeof(rbsp), width, height, chroma_format_idc);
+    size_t rlen = build_h264_sps_rbsp(rbsp, sizeof(rbsp), p);
     if (rlen == 0U) {
         return 0U;
     }
@@ -240,7 +294,7 @@ size_t open_nvenc_h264_write_headers(uint8_t *out, size_t cap,
     }
     pos += n;
 
-    rlen = build_h264_pps_rbsp(rbsp, sizeof(rbsp), chroma_format_idc);
+    rlen = build_h264_pps_rbsp(rbsp, sizeof(rbsp), p->chroma_format_idc);
     if (rlen == 0U) {
         return 0U;
     }
@@ -250,4 +304,18 @@ size_t open_nvenc_h264_write_headers(uint8_t *out, size_t cap,
     }
     pos += n;
     return pos;
+}
+
+size_t open_nvenc_h264_write_headers(uint8_t *out, size_t cap,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t chroma_format_idc)
+{
+    open_nvenc_h264_hdr_params_t p;
+    memset(&p, 0, sizeof(p));
+    p.width             = width;
+    p.height            = height;
+    p.chroma_format_idc = chroma_format_idc;
+    p.fps_num           = 60U;
+    p.fps_den           = 1U;
+    return open_nvenc_h264_write_headers_ex(out, cap, &p);
 }

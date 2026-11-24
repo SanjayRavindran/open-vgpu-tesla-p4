@@ -22,7 +22,9 @@ Because the vendor 535.309.01 guest library caps `libnvidia-encode.so.1` at NVEN
 cd open-nvenc
 make clean all
 make test        # Offline ABI + bitstream header + struct validation (no GPU needed)
-make hw-test     # Live GP104 hardware encode across 14 HEVC/H.264 8-bit/10-bit 4:2:0/4:4:4 cases
+make hw-test     # Live GP104 hardware encode across 16 HEVC/H.264 8-bit/10-bit 4:2:0/4:4:4 cases
+make diff-test   # Differential ABI & NvTool check against vendor 535.309.01
+make diff-hw-test # Live GP104 bug-for-bug hardware parity benchmark vs vendor blob (scrolling/cursor/PaintOver/H.264)
 ```
 
 `OPEN_NVENC_NVIDIACTL_PATH=/nonexistent make test` runs the offline unit suite without `/dev/nvidiactl`.

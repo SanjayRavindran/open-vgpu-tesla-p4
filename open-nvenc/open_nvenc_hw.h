@@ -26,6 +26,24 @@ typedef struct _open_nvenc_hw_init_cfg {
     uint32_t fps_den;
     uint32_t min_qp;
     uint32_t max_qp;
+    uint32_t level_idc;
+    uint32_t tier;
+    uint32_t target_quality;
+    uint32_t vui_overscan_present;
+    uint32_t vui_overscan_info;
+    uint32_t vui_video_signal_present;
+    uint32_t vui_video_format;
+    uint32_t vui_full_range;
+    uint32_t vui_colour_desc_present;
+    uint32_t vui_colour_primaries;
+    uint32_t vui_transfer_char;
+    uint32_t vui_matrix_coeffs;
+    uint32_t vui_chroma_loc_present;
+    uint32_t vui_chroma_loc_top;
+    uint32_t vui_chroma_loc_bot;
+    uint32_t vui_timing_present;
+    uint32_t vui_num_units_in_tick;
+    uint32_t vui_time_scale;
 } open_nvenc_hw_init_cfg_t;
 
 int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
@@ -51,6 +69,9 @@ void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
                               uint32_t vbv_buffer_size,
                               uint32_t fps_num,
                               uint32_t fps_den,
+                              uint32_t min_qp,
+                              uint32_t max_qp,
+                              uint32_t target_quality,
                               int force_idr);
 
 NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
