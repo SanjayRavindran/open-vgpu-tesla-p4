@@ -208,6 +208,9 @@ typedef struct {
     uint64_t gpu_va;
     uint64_t size;
     void    *cpu;
+    void    *mmap_base;
+    size_t   mmap_len;
+    uint64_t rm_linear_addr;
     int      map_fd;
     int      is_vidmem;
     int      dma_mapped;
@@ -231,6 +234,9 @@ struct _open_nvenc_hw_ctx {
     uint32_t h_next;
 
     void    *userd_cpu;
+    void    *userd_mmap_base;
+    size_t   userd_mmap_len;
+    uint64_t userd_rm_addr;
     int      userd_fd;
     int      channel_mapped;
 
@@ -253,6 +259,9 @@ struct _open_nvenc_hw_ctx {
     int      ce_mapped;
     int      ce_userd_fd;
     void    *ce_userd_cpu;
+    void    *ce_userd_mmap_base;
+    size_t   ce_userd_mmap_len;
+    uint64_t ce_userd_rm_addr;
     uint32_t ce_gp_put;
     uint32_t ce_pb_dw_cur;
     int      has_ce;
@@ -285,6 +294,12 @@ struct _open_nvenc_hw_ctx {
     double   rc_vbv_size;
     uint32_t rc_cur_qp;
 };
+
+static size_t hw_page_size(void)
+{
+    long pg = sysconf(_SC_PAGESIZE);
+    return (pg > 0L) ? (size_t)pg : 4096U;
+}
 
 static uint32_t next_handle(open_nvenc_hw_ctx_t *ctx)
 {
@@ -512,14 +527,21 @@ static int alloc_buf_sysmem(open_nvenc_hw_ctx_t *ctx, hw_buf_t *buf,
             close(mfd);
             return -1;
         }
-        void *cpu = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
-        if (cpu == MAP_FAILED) {
+        buf->rm_linear_addr = mreq.pLinearAddress;
+        buf->map_fd         = mfd;
+
+        size_t pg       = hw_page_size();
+        size_t pg_mask  = pg - 1U;
+        size_t page_off = (size_t)(mreq.pLinearAddress & (uint64_t)pg_mask);
+        size_t map_len  = (page_off + (size_t)size + pg_mask) & ~pg_mask;
+        void *map_base  = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+        if (map_base == MAP_FAILED) {
             set_err(err_buf, err_cap, "mmap sysmem failed");
-            close(mfd);
             return -1;
         }
-        buf->cpu    = cpu;
-        buf->map_fd = mfd;
+        buf->mmap_base = map_base;
+        buf->mmap_len  = map_len;
+        buf->cpu       = (uint8_t *)map_base + page_off;
         memset(buf->cpu, 0, (size_t)size);
     }
     return 0;
@@ -571,19 +593,26 @@ static void free_hw_buf(open_nvenc_hw_ctx_t *ctx, hw_buf_t *buf, uint32_t h_dma,
     if (!ctx || !buf) {
         return;
     }
-    if (buf->cpu && buf->cpu != MAP_FAILED) {
+    if (buf->mmap_base && buf->mmap_base != MAP_FAILED) {
+        munmap(buf->mmap_base, buf->mmap_len ? buf->mmap_len : (size_t)buf->size);
+    } else if (buf->cpu && buf->cpu != MAP_FAILED) {
         munmap(buf->cpu, (size_t)buf->size);
-        buf->cpu = NULL;
     }
+    buf->mmap_base = NULL;
+    buf->mmap_len  = 0U;
+    buf->cpu       = NULL;
     if (buf->map_fd >= 0) {
         nv_nvos33_t ureq;
         memset(&ureq, 0, sizeof(ureq));
-        ureq.hClient = ctx->h_client;
-        ureq.hDevice = ctx->h_subdevice;
-        ureq.hMemory = buf->h_mem;
+        ureq.hClient        = ctx->h_client;
+        ureq.hDevice        = ctx->h_subdevice;
+        ureq.hMemory        = buf->h_mem;
+        ureq.pLinearAddress = buf->rm_linear_addr;
+        ureq.flags          = 0x03008000U;
         (void)ioctl(ctx->ctl_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_RM_UNMAP_MEMORY, nv_nvos33_t), &ureq);
         close(buf->map_fd);
-        buf->map_fd = -1;
+        buf->map_fd         = -1;
+        buf->rm_linear_addr = 0ULL;
     }
     rm_unmap_dma(ctx, h_dma, buf);
     buf->dma_mapped = 0;
@@ -1134,7 +1163,8 @@ static void ce_init_and_clear_vidmem(open_nvenc_hw_ctx_t *ctx,
                                      hw_buf_t *const *bufs, size_t nbufs,
                                      open_nvenc_rm_stats_t *rm_stats)
 {
-    if (!ctx || getenv("OPEN_NVENC_NO_CE")) {
+    const char *enable_ce = getenv("OPEN_NVENC_ENABLE_CE");
+    if (!ctx || !enable_ce || !enable_ce[0]) {
         return;
     }
     ctx->h_ce_channel = next_handle(ctx);
@@ -1190,12 +1220,21 @@ static void ce_init_and_clear_vidmem(open_nvenc_hw_ctx_t *ctx,
         ctx->has_ce = 0;
         return;
     }
-    ctx->ce_mapped    = 1;
-    ctx->ce_userd_cpu = mmap(NULL, 0x1000U, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->ce_userd_fd, 0);
-    if (ctx->ce_userd_cpu == MAP_FAILED) {
-        ctx->ce_userd_cpu = NULL;
-        ctx->has_ce = 0;
-        return;
+    ctx->ce_mapped        = 1;
+    ctx->ce_userd_rm_addr = umap.pLinearAddress;
+    {
+        size_t pg       = hw_page_size();
+        size_t pg_mask  = pg - 1U;
+        size_t page_off = (size_t)(umap.pLinearAddress & (uint64_t)pg_mask);
+        size_t map_len  = (page_off + (size_t)umap.length + pg_mask) & ~pg_mask;
+        void *map_base  = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->ce_userd_fd, 0);
+        if (map_base == MAP_FAILED) {
+            ctx->has_ce = 0;
+            return;
+        }
+        ctx->ce_userd_mmap_base = map_base;
+        ctx->ce_userd_mmap_len  = map_len;
+        ctx->ce_userd_cpu       = (uint8_t *)map_base + page_off;
     }
 
     if (rm_alloc64(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, ctx->h_ce_obj,
@@ -1446,11 +1485,20 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
         goto fail;
     }
     ctx->channel_mapped = 1;
-    ctx->userd_cpu = mmap(NULL, 0x1000U, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->userd_fd, 0);
-    if (ctx->userd_cpu == MAP_FAILED) {
-        ctx->userd_cpu = NULL;
-        set_err(err_buf, err_cap, "mmap USERD failed");
-        goto fail;
+    ctx->userd_rm_addr  = umap.pLinearAddress;
+    {
+        size_t pg       = hw_page_size();
+        size_t pg_mask  = pg - 1U;
+        size_t page_off = (size_t)(umap.pLinearAddress & (uint64_t)pg_mask);
+        size_t map_len  = (page_off + (size_t)umap.length + pg_mask) & ~pg_mask;
+        void *map_base  = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_SHARED, ctx->userd_fd, 0);
+        if (map_base == MAP_FAILED) {
+            set_err(err_buf, err_cap, "mmap USERD failed");
+            goto fail;
+        }
+        ctx->userd_mmap_base = map_base;
+        ctx->userd_mmap_len  = map_len;
+        ctx->userd_cpu       = (uint8_t *)map_base + page_off;
     }
 
     /* Allocate NVC2B7 engine on channel */
@@ -1595,19 +1643,26 @@ void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx, open_nvenc_rm_stats_t *rm_s
         (void)rm_free(ctx->ctl_fd, ctx->h_client, ctx->h_ce_channel, ctx->h_ce_obj, rm_stats);
         ctx->h_ce_obj = 0U;
     }
-    if (ctx->ce_userd_cpu && ctx->ce_userd_cpu != MAP_FAILED) {
+    if (ctx->ce_userd_mmap_base && ctx->ce_userd_mmap_base != MAP_FAILED) {
+        munmap(ctx->ce_userd_mmap_base, ctx->ce_userd_mmap_len ? ctx->ce_userd_mmap_len : 0x1000U);
+    } else if (ctx->ce_userd_cpu && ctx->ce_userd_cpu != MAP_FAILED) {
         munmap(ctx->ce_userd_cpu, 0x1000U);
-        ctx->ce_userd_cpu = NULL;
     }
+    ctx->ce_userd_mmap_base = NULL;
+    ctx->ce_userd_mmap_len  = 0U;
+    ctx->ce_userd_cpu       = NULL;
     if (ctx->ce_userd_fd >= 0) {
         if (ctx->ce_mapped) {
             nv_nvos33_t ureq;
             memset(&ureq, 0, sizeof(ureq));
-            ureq.hClient = ctx->h_client;
-            ureq.hDevice = ctx->h_subdevice;
-            ureq.hMemory = ctx->h_ce_channel;
+            ureq.hClient        = ctx->h_client;
+            ureq.hDevice        = ctx->h_subdevice;
+            ureq.hMemory        = ctx->h_ce_channel;
+            ureq.pLinearAddress = ctx->ce_userd_rm_addr;
+            ureq.flags          = 0x03000000U;
             (void)ioctl(ctx->ctl_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_RM_UNMAP_MEMORY, nv_nvos33_t), &ureq);
-            ctx->ce_mapped = 0;
+            ctx->ce_mapped         = 0;
+            ctx->ce_userd_rm_addr  = 0ULL;
         }
         close(ctx->ce_userd_fd);
         ctx->ce_userd_fd = -1;
@@ -1636,19 +1691,26 @@ void open_nvenc_hw_destroy(open_nvenc_hw_ctx_t *ctx, open_nvenc_rm_stats_t *rm_s
         (void)rm_free(ctx->ctl_fd, ctx->h_client, ctx->h_channel, ctx->h_nvenc, rm_stats);
         ctx->h_nvenc = 0U;
     }
-    if (ctx->userd_cpu && ctx->userd_cpu != MAP_FAILED) {
+    if (ctx->userd_mmap_base && ctx->userd_mmap_base != MAP_FAILED) {
+        munmap(ctx->userd_mmap_base, ctx->userd_mmap_len ? ctx->userd_mmap_len : 0x1000U);
+    } else if (ctx->userd_cpu && ctx->userd_cpu != MAP_FAILED) {
         munmap(ctx->userd_cpu, 0x1000U);
-        ctx->userd_cpu = NULL;
     }
+    ctx->userd_mmap_base = NULL;
+    ctx->userd_mmap_len  = 0U;
+    ctx->userd_cpu       = NULL;
     if (ctx->userd_fd >= 0) {
         if (ctx->channel_mapped) {
             nv_nvos33_t ureq;
             memset(&ureq, 0, sizeof(ureq));
-            ureq.hClient = ctx->h_client;
-            ureq.hDevice = ctx->h_subdevice;
-            ureq.hMemory = ctx->h_channel;
+            ureq.hClient        = ctx->h_client;
+            ureq.hDevice        = ctx->h_subdevice;
+            ureq.hMemory        = ctx->h_channel;
+            ureq.pLinearAddress = ctx->userd_rm_addr;
+            ureq.flags          = 0x03000000U;
             (void)ioctl(ctx->ctl_fd, _IOWR(NV_IOCTL_MAGIC, NV_ESC_RM_UNMAP_MEMORY, nv_nvos33_t), &ureq);
             ctx->channel_mapped = 0;
+            ctx->userd_rm_addr  = 0ULL;
         }
         close(ctx->userd_fd);
         ctx->userd_fd = -1;
@@ -1729,37 +1791,51 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
 
     memset(dst, 0, ctx->surface_size);
 
-    if (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ABGR) {
+    if (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ABGR ||
+        fmt == NV_ENC_BUFFER_FORMAT_ARGB10 || fmt == NV_ENC_BUFFER_FORMAT_ABGR10) {
         uint8_t *dst_uv   = dst + (size_t)dst_pitch * (size_t)ah;
         size_t   uv_avail = ctx->surface_size - (size_t)dst_pitch * (size_t)ah;
         uint32_t uv_pitch = is_444 ? (dst_pitch * 2U) : dst_pitch;
-        int      is_argb  = (fmt == NV_ENC_BUFFER_FORMAT_ARGB);
+        int      is_argb  = (fmt == NV_ENC_BUFFER_FORMAT_ARGB || fmt == NV_ENC_BUFFER_FORMAT_ARGB10);
+        int      is_rgb10 = (fmt == NV_ENC_BUFFER_FORMAT_ARGB10 || fmt == NV_ENC_BUFFER_FORMAT_ABGR10);
 
         for (uint32_t y = 0U; y < ah; y++) {
             uint32_t sy = (y < h) ? y : (h - 1U);
             const uint8_t *srow = src + (size_t)sy * src_pitch;
             for (uint32_t x = 0U; x < w; x++) {
-                const uint8_t *px = srow + (size_t)x * 4U;
-                int r = is_argb ? px[2] : px[0];
-                int g = px[1];
-                int b = is_argb ? px[0] : px[2];
-                int yy = ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                int uu = ((-26 * r - 86 * g + 112 * b + 128) >> 8) + 128;
-                int vv = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
-                uint8_t y8 = clamp_u8(yy);
-                uint8_t u8 = clamp_u8(uu);
-                uint8_t v8 = clamp_u8(vv);
+                int r10, g10, b10;
+                if (is_rgb10) {
+                    uint32_t p32;
+                    memcpy(&p32, srow + (size_t)x * 4U, sizeof(p32));
+                    if (is_argb) {
+                        r10 = (int)((p32 >> 20) & 0x3ffU);
+                        g10 = (int)((p32 >> 10) & 0x3ffU);
+                        b10 = (int)(p32 & 0x3ffU);
+                    } else {
+                        b10 = (int)((p32 >> 20) & 0x3ffU);
+                        g10 = (int)((p32 >> 10) & 0x3ffU);
+                        r10 = (int)(p32 & 0x3ffU);
+                    }
+                } else {
+                    const uint8_t *px = srow + (size_t)x * 4U;
+                    r10 = (int)(is_argb ? px[2] : px[0]) << 2;
+                    g10 = (int)px[1] << 2;
+                    b10 = (int)(is_argb ? px[0] : px[2]) << 2;
+                }
+                int yy = ((47 * r10 + 157 * g10 + 16 * b10 + 512) >> 8) + 64;
+                int uu = ((-26 * r10 - 86 * g10 + 112 * b10 + 512) >> 8) + 512;
+                int vv = ((112 * r10 - 102 * g10 - 10 * b10 + 512) >> 8) + 512;
+                uint16_t y10 = (uint16_t)(yy < 0 ? 0 : (yy > 1023 ? 1023 : yy)) << 6;
+                uint16_t u10 = (uint16_t)(uu < 0 ? 0 : (uu > 1023 ? 1023 : uu)) << 6;
+                uint16_t v10 = (uint16_t)(vv < 0 ? 0 : (vv > 1023 ? 1023 : vv)) << 6;
 
                 if (is_10b) {
-                    uint16_t y10 = (uint16_t)y8 << 8;
                     size_t off = gob_bl_offset(x * 2U, y, dst_pitch);
                     if (off + 1U < ctx->surface_size) {
                         dst[off]      = (uint8_t)(y10 & 0xffU);
                         dst[off + 1U] = (uint8_t)(y10 >> 8);
                     }
                     if (is_444) {
-                        uint16_t u10 = (uint16_t)u8 << 8;
-                        uint16_t v10 = (uint16_t)v8 << 8;
                         size_t off_u = gob_bl_offset(x * 4U, y, uv_pitch);
                         size_t off_v = gob_bl_offset(x * 4U + 2U, y, uv_pitch);
                         if (off_u + 1U < uv_avail) {
@@ -1771,8 +1847,6 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                             dst_uv[off_v + 1U] = (uint8_t)(v10 >> 8);
                         }
                     } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
-                        uint16_t u10 = (uint16_t)u8 << 8;
-                        uint16_t v10 = (uint16_t)v8 << 8;
                         size_t off_u = gob_bl_offset(x * 2U, y >> 1, uv_pitch);
                         size_t off_v = gob_bl_offset(x * 2U + 2U, y >> 1, uv_pitch);
                         if (off_u + 1U < uv_avail) {
@@ -1787,25 +1861,25 @@ static void copy_surface_to_gpu(open_nvenc_hw_ctx_t *ctx,
                 } else {
                     size_t off = gob_bl_offset(x, y, dst_pitch);
                     if (off < ctx->surface_size) {
-                        dst[off] = y8;
+                        dst[off] = (uint8_t)(y10 >> 8);
                     }
                     if (is_444) {
                         size_t off_u = gob_bl_offset(x * 2U, y, uv_pitch);
                         size_t off_v = gob_bl_offset(x * 2U + 1U, y, uv_pitch);
                         if (off_u < uv_avail) {
-                            dst_uv[off_u] = u8;
+                            dst_uv[off_u] = (uint8_t)(u10 >> 8);
                         }
                         if (off_v < uv_avail) {
-                            dst_uv[off_v] = v8;
+                            dst_uv[off_v] = (uint8_t)(v10 >> 8);
                         }
                     } else if ((y & 1U) == 0U && (x & 1U) == 0U) {
                         size_t off_u = gob_bl_offset(x, y >> 1, uv_pitch);
                         size_t off_v = gob_bl_offset(x + 1U, y >> 1, uv_pitch);
                         if (off_u < uv_avail) {
-                            dst_uv[off_u] = u8;
+                            dst_uv[off_u] = (uint8_t)(u10 >> 8);
                         }
                         if (off_v < uv_avail) {
-                            dst_uv[off_v] = v8;
+                            dst_uv[off_v] = (uint8_t)(v10 >> 8);
                         }
                     }
                 }
@@ -2039,8 +2113,65 @@ NVENCSTATUS open_nvenc_hw_encode_frame(open_nvenc_hw_ctx_t *ctx,
 
     if (wait_sema_equal(sema_word, done_token, 2000) < 0) {
         volatile uint32_t *st_words = (volatile uint32_t *)ctx->status_buf.cpu;
-        snprintf(err_buf, err_cap, "NVC2B7_EXECUTE timeout (status[1]=%u bits=%u sema=%u)",
-                 st_words[1], st_words[2], *sema_word);
+        volatile uint32_t *userd    = (volatile uint32_t *)ctx->userd_cpu;
+        volatile uint32_t *err_w    = (volatile uint32_t *)ctx->err_buf.cpu;
+        const char *trace_dir       = getenv("OPEN_NVENC_TRACE_DIR");
+        if (trace_dir && trace_dir[0]) {
+            char dpath[512];
+            snprintf(dpath, sizeof(dpath), "%s/hw_timeout_diag.txt", trace_dir);
+            FILE *dfp = fopen(dpath, "a");
+            if (dfp) {
+                const uint32_t *ps = (const uint32_t *)ctx->pic_setup_buf.cpu;
+                fprintf(dfp,
+                        "=== NVC2B7 TIMEOUT frame=%u is_idr=%d is_h264=%d ===\n"
+                        "vaspace=0x%x chan=0x%x nvenc=0x%x userd_rm=0x%llx gp_get=%u gp_put=%u sema=%u (exp=%u)\n"
+                        "status[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n"
+                        "VAs: pb=0x%llx(0x%llx) sema=0x%llx err=0x%llx ps=0x%llx scr=0x%llx(0x%llx)\n"
+                        "     qm=0x%llx st=0x%llx bs=0x%llx(0x%llx) in=0x%llx(0x%llx) r0=0x%llx r1=0x%llx aux=0x%llx\n",
+                        ctx->frame_num, is_idr, ctx->cfg.is_h264,
+                        ctx->h_vaspace, ctx->h_channel, ctx->h_nvenc,
+                        (unsigned long long)ctx->userd_rm_addr,
+                        userd ? userd[0x88U / 4U] : 0xffffffffU, ctx->gp_put,
+                        *sema_word, done_token,
+                        st_words[0], st_words[1], st_words[2], st_words[3],
+                        st_words[4], st_words[5], st_words[6], st_words[7],
+                        (unsigned long long)ctx->pb_buf.gpu_va, (unsigned long long)ctx->pb_buf.size,
+                        (unsigned long long)ctx->sema_buf.gpu_va,
+                        (unsigned long long)ctx->err_buf.gpu_va,
+                        (unsigned long long)ctx->pic_setup_buf.gpu_va,
+                        (unsigned long long)ctx->scratch_buf.gpu_va, (unsigned long long)ctx->scratch_buf.size,
+                        (unsigned long long)ctx->qm_rc_buf.gpu_va,
+                        (unsigned long long)ctx->status_buf.gpu_va,
+                        (unsigned long long)ctx->bs_buf.gpu_va, (unsigned long long)ctx->bs_buf.size,
+                        (unsigned long long)ctx->input_buf.gpu_va, (unsigned long long)ctx->input_buf.size,
+                        (unsigned long long)ctx->recon_buf[0].gpu_va,
+                        (unsigned long long)ctx->recon_buf[1].gpu_va,
+                        (unsigned long long)ctx->io_aux_buf.gpu_va);
+                for (int si = 0; err_w && si < 10; si++) {
+                    const volatile uint32_t *nw = &err_w[si * 4];
+                    if (nw[0] || nw[1] || nw[2] || nw[3]) {
+                        fprintf(dfp, "err_slot[%d]= %08x %08x info32=%08x status=%08x\n",
+                                si, nw[0], nw[1], nw[2], nw[3]);
+                    }
+                }
+                fprintf(dfp,
+                        "ps[0x0..0x24]= %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n"
+                        "ps[0x64..0x7c]= %08x %08x %08x %08x %08x %08x %08x a4=%08x\n"
+                        "ps[0x1a0..0x1bc]= %08x %08x %08x %08x %08x %08x %08x %08x 30c=%08x 5900=%08x\n",
+                        ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7], ps[8], ps[9],
+                        ps[0x64U / 4U], ps[0x68U / 4U], ps[0x6cU / 4U], ps[0x70U / 4U],
+                        ps[0x74U / 4U], ps[0x78U / 4U], ps[0x7cU / 4U], ps[0xa4U / 4U],
+                        ps[0x1a0U / 4U], ps[0x1a4U / 4U], ps[0x1a8U / 4U], ps[0x1acU / 4U],
+                        ps[0x1b0U / 4U], ps[0x1b4U / 4U], ps[0x1b8U / 4U], ps[0x1bcU / 4U],
+                        ps[0x30cU / 4U], ps[0x5900U / 4U]);
+                fclose(dfp);
+            }
+        }
+        snprintf(err_buf, err_cap,
+                 "NVC2B7 timeout (st=%u b=%u s=%u gp=%u/%u e=%08x/%08x ce=%d)",
+                 st_words[1], st_words[2], *sema_word,
+                 userd ? userd[0x88U / 4U] : 0xffffffffU, ctx->gp_put,
+                 err_w ? err_w[2] : 0U, err_w ? err_w[3] : 0U, ctx->has_ce);
         return NV_ENC_ERR_GENERIC;
     }
 

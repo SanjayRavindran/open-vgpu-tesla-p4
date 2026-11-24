@@ -1,6 +1,8 @@
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -Werror -fPIC -std=c11
 LDFLAGS ?= -ldl
+PREFIX  ?= /usr/local
+LIBDIR  ?= $(PREFIX)/lib
 
 LIB_TARGET  := libopen-nvidia-encode.so
 SONAME_LINK := libnvidia-encode.so.1
@@ -9,7 +11,7 @@ HW_BIN      := test_nvenc_hw
 SRCS        := open_nvenc.c open_nvenc_hw.c open_nvenc_hevc_hdr.c open_nvenc_h264_hdr.c
 HDRS        := open_nvenc.h open_nvenc_hw.h open_nvenc_hevc_hdr.h open_nvenc_h264_hdr.h
 
-.PHONY: all test diff-test hw-test clean
+.PHONY: all test diff-test hw-test install uninstall clean
 
 all: $(LIB_TARGET) $(UNIT_BIN) $(HW_BIN)
 
@@ -31,6 +33,15 @@ diff-test: $(UNIT_BIN)
 
 hw-test: $(HW_BIN)
 	./$(HW_BIN)
+
+install: $(LIB_TARGET)
+	install -d "$(DESTDIR)$(LIBDIR)"
+	install -m 0755 $(LIB_TARGET) "$(DESTDIR)$(LIBDIR)/$(LIB_TARGET)"
+	ln -sf $(LIB_TARGET) "$(DESTDIR)$(LIBDIR)/$(SONAME_LINK)"
+	ln -sf $(SONAME_LINK) "$(DESTDIR)$(LIBDIR)/libnvidia-encode.so"
+
+uninstall:
+	rm -f "$(DESTDIR)$(LIBDIR)/$(LIB_TARGET)" "$(DESTDIR)$(LIBDIR)/$(SONAME_LINK)" "$(DESTDIR)$(LIBDIR)/libnvidia-encode.so"
 
 clean:
 	rm -f $(LIB_TARGET) $(SONAME_LINK) $(UNIT_BIN) $(HW_BIN) *.o

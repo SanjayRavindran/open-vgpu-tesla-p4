@@ -337,8 +337,10 @@ if [ "$WITH_SELKIES" -eq 1 ] && [ -f "$SCRIPT_DIR/setup_selkies_pixelflux_vgpu.s
   bash "$SCRIPT_DIR/setup_selkies_pixelflux_vgpu.sh"
 fi
 
-# 12. Build clean-room libopen-nvidia-encode.so & optional open guest kernel modules
-if [ -f "$REPO_ROOT/open-nvenc/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+# 12. Install clean-room libopen-nvidia-encode.so (NVENC 13.0) & optional open guest kernel modules
+if [ -f "$SCRIPT_DIR/install_open_nvenc.sh" ] && [ -f "$REPO_ROOT/open-nvenc/Makefile" ] && command -v gcc >/dev/null 2>&1; then
+  bash "$SCRIPT_DIR/install_open_nvenc.sh"
+elif [ -f "$REPO_ROOT/open-nvenc/Makefile" ] && command -v gcc >/dev/null 2>&1; then
   make -C "$REPO_ROOT/open-nvenc" clean all
   mkdir -p /usr/local/lib64 /usr/local/lib
   install -m 0755 "$REPO_ROOT/open-nvenc/libopen-nvidia-encode.so" /usr/local/lib64/libopen-nvidia-encode.so 2>/dev/null || true
