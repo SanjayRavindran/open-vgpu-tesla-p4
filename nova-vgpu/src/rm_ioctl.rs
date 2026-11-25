@@ -1,5 +1,5 @@
 //! NVIDIA Linux RM character-device (`/dev/nvidiactl`, `/dev/nvidiaN`) ioctl client
-//! replicating `nvidia-vgpud` (`535.309.01-vgpu-kvm`) analyzed with REA 6.10.1.
+//! replicating `nvidia-vgpud` (`580.196.09-vgpu-kvm`) analyzed with REA 6.10.1.
 
 use crate::config::{Nva081SetInfoParams, VgpuConfigStore};
 use std::collections::BTreeMap;
@@ -104,10 +104,10 @@ pub fn detect_driver_version(proc_version_text: &str) -> String {
             }
         }
     }
-    String::from("535.309.01")
+    String::from("580.196.09")
 }
 
-/// Execute the full `nvidia-vgpud` (`0x402ca0.c`) GPU enumeration and `0xa0810101`
+/// Execute the full R580 `nvidia-vgpud` GPU enumeration and `0xa0810101`
 /// profile registration sequence against any [`RmTransport`].
 pub fn run_vgpud_registration<T: RmTransport>(
     transport: &mut T,
@@ -138,7 +138,7 @@ fn register_all_gpus<T: RmTransport>(
     minor_by_gpu: &BTreeMap<u32, u32>,
     h_client: u32,
 ) -> Result<Vec<RegisteredGpuSummary>, String> {
-    let mut probed = [0u8; 0x100];
+    let mut probed = [0u8; 0x180];
     let st = transport.control(
         h_client,
         h_client,
@@ -212,7 +212,14 @@ fn register_single_gpu<T: RmTransport>(
 
     let minor = minor_by_gpu.get(&gpu_id).copied();
     let res = register_attached_gpu(
-        transport, store, minor, h_client, gpu_id, domain, bus, slot,
+        transport,
+        store,
+        minor,
+        h_client,
+        gpu_id,
+        domain,
+        bus,
+        slot,
     );
 
     if let Some(m) = minor {
@@ -306,7 +313,7 @@ fn register_attached_gpu<T: RmTransport>(
             let subsystem_vendor_id = read_u16(&bus_pci, 4);
             let subsystem_id = read_u16(&bus_pci, 6);
 
-            let mut vmode_buf = [0u8; 4];
+            let mut vmode_buf = [0u8; 8];
             let st = transport.control(
                 h_client,
                 h_dev,
@@ -894,9 +901,9 @@ mod tests {
 
     #[test]
     fn test_detect_driver_version_parses_proc() {
-        let txt = "NVRM version: NVIDIA UNIX x86_64 Kernel Module  535.309.01  Wed Feb 11 00:00:00 UTC 2026\n";
-        assert_eq!(detect_driver_version(txt), "535.309.01");
-        assert_eq!(detect_driver_version("empty"), "535.309.01");
+        let txt = "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.196.09  Wed Oct 21 00:00:00 UTC 2026\n";
+        assert_eq!(detect_driver_version(txt), "580.196.09");
+        assert_eq!(detect_driver_version("empty"), "580.196.09");
     }
 
     #[test]
@@ -909,7 +916,7 @@ mod tests {
             ..Default::default()
         };
 
-        let summary = run_vgpud_registration(&mut mock, &store, "535.309.01").unwrap();
+        let summary = run_vgpud_registration(&mut mock, &store, "580.196.09").unwrap();
         assert_eq!(summary.gpus.len(), 1);
         assert_eq!(summary.gpus[0].profiles_registered, 2);
         assert!(summary.gpus[0].skipped_reason.is_none());
@@ -917,10 +924,14 @@ mod tests {
         assert_eq!(mock.closed_minors, vec![0]);
         assert!(mock.calls.contains(&String::from("ctrl:0xa0810109")));
         assert_eq!(mock.set_info_packets.len(), 2);
+        assert_eq!(mock.set_info_packets[0].len(), 0x1540);
         assert_eq!(mock.set_info_packets[0][0], 1); // first_flag = 1
         assert_eq!(mock.set_info_packets[1][0], 0); // first_flag = 0
-        assert_eq!(read_u32(&mock.set_info_packets[0], 0x1360), 1);
-        assert_eq!(read_u32(&mock.set_info_packets[1], 0x1360), 2);
+        assert_eq!(read_u32(&mock.set_info_packets[0], 0x008), 65);
+        assert!(mock.set_info_packets[0][0x00c..0x017].starts_with(b"GRID P4-4Q"));
+        assert_eq!(read_u32(&mock.set_info_packets[0], 0x18c), 2);
+        assert_eq!(read_u32(&mock.set_info_packets[0], 0x1538), 1);
+        assert_eq!(read_u32(&mock.set_info_packets[1], 0x1538), 2);
     }
 
     #[test]
@@ -929,11 +940,11 @@ mod tests {
         let mut mock = MockRmTransport {
             h_client: 0xc1d0_0020,
             virtualization_mode: 1, // VGX guest mode -> must skip cleanly
-            pci_ids: (0x10de, 0x1bb3, 0x10de, 0x1206),
+            pci_ids: (0x10de, 0x1bb3, 0x10de, 0x11d8),
             ..Default::default()
         };
 
-        let summary = run_vgpud_registration(&mut mock, &store, "535.309.01").unwrap();
+        let summary = run_vgpud_registration(&mut mock, &store, "580.196.09").unwrap();
         assert_eq!(summary.gpus[0].profiles_registered, 0);
         assert!(summary.gpus[0].skipped_reason.is_some());
         assert!(!mock.calls.iter().any(|c| c.contains("0xa0810101")));

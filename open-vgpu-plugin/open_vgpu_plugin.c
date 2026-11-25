@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 /* -------------------------------------------------------------------------
- * Default env stubs matching libnvidia-vgpu.so.535.309.01 VER_2_0 layout
+ * Default env stubs matching libnvidia-vgpu.so R580 / 580.196.09 (VER_2_0)
  * ------------------------------------------------------------------------- */
 static uint32_t stub_inject_msi(uint64_t dev_handle, uint64_t a, uint32_t b)
 {
@@ -103,7 +103,7 @@ static void ensure_backend_initialized(void)
     const char *mode = getenv("OPEN_VGPU_PLUGIN_MODE");
     const char *vlib = getenv("OPEN_VGPU_VENDOR_LIB");
     if (!vlib || vlib[0] == '\0') {
-        vlib = "/opt/nvidia-vgpu-535/lib/libnvidia-vgpu.so.535.309.01";
+        vlib = "/opt/nvidia-vgpu-580/lib/libnvidia-vgpu.so.580.196.09";
     }
 
     int want_hybrid = 0;

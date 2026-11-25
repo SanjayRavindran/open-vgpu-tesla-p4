@@ -107,7 +107,7 @@ static void register_gpu_minor_fd(int ctl_fd, uint32_t minor) {
 }
 
 static void read_proc_driver_version(char *out, size_t out_sz) {
-    snprintf(out, out_sz, "535.309.01");
+    snprintf(out, out_sz, "580.196.07");
     FILE *fp = fopen("/proc/driver/nvidia/version", "r");
     if (!fp) return;
     char line[256];
@@ -325,6 +325,15 @@ gridd_status_t gridd_rm_init(gridd_rm_client_t *client, const gridd_rm_ops_t *op
 
         uint32_t vmode = 0;
         st = rm_ctrl(client, g->h_device, NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE, &vmode, sizeof(vmode));
+        if (st == 0x34U) {
+            /* R580+ widened NV0080_CTRL_GPU_GET_VIRTUALIZATION_MODE_PARAMS to 8 bytes. */
+            uint32_t vmode_r580[2] = {0, 0};
+            st = rm_ctrl(client, g->h_device, NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE,
+                         vmode_r580, sizeof(vmode_r580));
+            if (st == 0) {
+                vmode = vmode_r580[0];
+            }
+        }
         if (st != 0) {
             LOG_E("Failed to determine virtualization mode for device %u, err code 0x%x", i, st);
             gridd_rm_destroy(client);

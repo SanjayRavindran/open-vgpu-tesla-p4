@@ -603,7 +603,7 @@ static void free_hw_buf(open_nvenc_hw_ctx_t *ctx, hw_buf_t *buf, uint32_t h_dma,
     buf->mmap_base = NULL;
     buf->mmap_len  = 0U;
     buf->cpu       = NULL;
-    if (buf->map_fd >= 0) {
+    if (buf->map_fd >= 0 && buf->h_mem != 0U) {
         nv_nvos33_t ureq;
         memset(&ureq, 0, sizeof(ureq));
         ureq.hClient        = ctx->h_client;
@@ -765,7 +765,13 @@ static void rc_init_state(open_nvenc_hw_ctx_t *ctx)
         fps = 60.0;
     }
 
-    uint32_t target_bps = ctx->cfg.average_bitrate ? ctx->cfg.average_bitrate : ctx->cfg.max_bitrate;
+    int is_vbr_cq = (ctx->cfg.rc_mode == NV_ENC_PARAMS_RC_VBR &&
+                     ctx->cfg.average_bitrate == 0U &&
+                     ctx->cfg.target_quality > 0U &&
+                     ctx->cfg.target_quality <= 51U);
+    uint32_t target_bps = is_vbr_cq
+                              ? 0U
+                              : (ctx->cfg.average_bitrate ? ctx->cfg.average_bitrate : ctx->cfg.max_bitrate);
     if (ctx->cfg.rc_mode != 0U && target_bps > 0U) {
         ctx->rc_bits_per_frame = (double)target_bps / fps;
         ctx->rc_vbv_size = (ctx->cfg.vbv_buffer_size > 0U)
@@ -1333,10 +1339,25 @@ int open_nvenc_hw_create(open_nvenc_hw_ctx_t **out_ctx,
     if (!ctx) {
         return -ENOMEM;
     }
-    ctx->ctl_fd      = ctl_fd;
-    ctx->dev_fd      = dev_fd;
-    ctx->userd_fd    = -1;
-    ctx->ce_userd_fd = -1;
+    ctx->ctl_fd               = ctl_fd;
+    ctx->dev_fd               = dev_fd;
+    ctx->userd_fd             = -1;
+    ctx->ce_userd_fd          = -1;
+    ctx->pb_buf.map_fd        = -1;
+    ctx->err_buf.map_fd       = -1;
+    ctx->sema_buf.map_fd      = -1;
+    ctx->pic_setup_buf.map_fd = -1;
+    ctx->scratch_buf.map_fd   = -1;
+    ctx->qm_rc_buf.map_fd     = -1;
+    ctx->status_buf.map_fd    = -1;
+    ctx->bs_buf.map_fd        = -1;
+    ctx->io_aux_buf.map_fd    = -1;
+    ctx->input_buf.map_fd     = -1;
+    ctx->recon_buf[0].map_fd  = -1;
+    ctx->recon_buf[1].map_fd  = -1;
+    ctx->coloc_mv_buf[0].map_fd = -1;
+    ctx->coloc_mv_buf[1].map_fd = -1;
+    ctx->h264_mv_buf.map_fd   = -1;
     ctx->cfg         = *cfg;
     ctx->h_next      = 0x80000000U;
 
@@ -2449,7 +2470,11 @@ void open_nvenc_hw_update_cfg(open_nvenc_hw_ctx_t *ctx,
     ctx->cfg.max_qp          = max_qp;
     ctx->cfg.target_quality  = target_quality;
 
-    uint32_t target_bps = average_bitrate ? average_bitrate : max_bitrate;
+    int is_vbr_cq = (rc_mode == NV_ENC_PARAMS_RC_VBR &&
+                     average_bitrate == 0U &&
+                     target_quality > 0U &&
+                     target_quality <= 51U);
+    uint32_t target_bps = is_vbr_cq ? 0U : (average_bitrate ? average_bitrate : max_bitrate);
     if (prev_rc == rc_mode && rc_mode != 0U && target_bps > 0U && ctx->rc_bits_per_frame > 0.0) {
         double fps = (fps_num > 0U && fps_den > 0U) ? ((double)fps_num / (double)fps_den) : 60.0;
         if (fps < 1.0) {

@@ -298,7 +298,8 @@ bool gridd_http_load_proxy_opts(const char *conf_path, gridd_http_opts_t *opts) 
             size_t dec_len = 0;
             if (gridd_base64_decode(b64, dec, sizeof(dec) - 1, &dec_len)) {
                 dec[dec_len] = '\0';
-                snprintf(opts->proxy_password, sizeof(opts->proxy_password), "%s", (const char *)dec);
+                snprintf(opts->proxy_password, sizeof(opts->proxy_password), "%.*s",
+                         (int)(sizeof(opts->proxy_password) - 1), (const char *)dec);
             }
         }
     } else if (cfg.proxy_server_address[0] != '\0') {

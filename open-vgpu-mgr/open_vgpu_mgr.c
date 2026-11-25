@@ -241,7 +241,7 @@ static int register_vgpu_types_for_gpu(uint32_t hClient, uint32_t hDevice,
 
 static int probe_gpus(uint32_t hClient, int is_daemon_init, uint32_t *out_count, uint32_t *gpu_ids)
 {
-    int32_t probed[64];
+    int32_t probed[96];
     memset(probed, 0xff, sizeof(probed));
 
     uint32_t total = 0;
@@ -826,6 +826,7 @@ static int send_attach_ack_and_vm_name(uint32_t inst, int status_in)
     if (st_out == 0) {
         NVA081_CTRL_VGPU_CONFIG_SET_VM_NAME_PARAMS nm;
         memset(&nm, 0, sizeof(nm));
+        nm.vmIdType = 1U;
         memcpy(nm.mdevUuid, in->mdev_uuid, VM_UUID_SIZE);
         safe_copy_str(nm.vmName, sizeof(nm.vmName), g_vm_name);
         NV_STATUS rm_st = rm_control(in->hClient, in->hVgpuConfig,
@@ -866,6 +867,7 @@ static void handle_bar_info_event(uint32_t inst)
         memcpy(sp.sparseOffsets, rp.sparseOffsets, sizeof(sp.sparseOffsets));
         memcpy(sp.sparseSizes, rp.sparseSizes, sizeof(sp.sparseSizes));
         sp.sparseCount = rp.sparseCount;
+        sp.isBar064bit = rp.isBar064bit;
     } else {
         vmiop_log(1, "vmiop_env_log: Failed to get bar info from RM, 0x%x\n", st);
     }
@@ -1199,6 +1201,8 @@ static void handle_ctl_create(void)
     sev.event_type = NV_VFIO_VGPU_CTLDEV_EVENT_CREATE_DEVICE;
     sev.return_status = st;
     sev.vgpu_id = cp.vgpuId;
+    sev.gpu_instance_id = cp.gpuInstanceId;
+    sev.placement_id = cp.placementId;
     vgpu_ctl_ioctl(NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA, sizeof(sev), &sev);
 }
 

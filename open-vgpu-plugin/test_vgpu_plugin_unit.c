@@ -1163,11 +1163,11 @@ static void test_consolidated_static_info_v23_05_binary_parity(void)
     w32(vbuf, 0x20, 0x23U);
     w32(vbuf, 0x24, 0x05U);
     w32(vbuf, 0x28, 0x01U);
-    snprintf((char *)(vbuf + 0x34), 32U, "535.309.01");
+    snprintf((char *)(vbuf + 0x34), 32U, "580.196.07");
     assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
 
     init_vrpc(vbuf, VRPC_FN_SET_GUEST_BRANCH_VER, 296U);
-    snprintf((char *)(vbuf + 0x20), 32U, "r535_00");
+    snprintf((char *)(vbuf + 0x20), 32U, "r580_00");
     assert(gp104_handle_vrpc_buffer(&dev, vbuf, sizeof(vbuf)) == NV_OK);
 
     /* Pull all 17 chunks of 0x50 (16 * 4056 + 2520 = 67416 = 0x10758 B) */
@@ -1192,10 +1192,10 @@ static void test_consolidated_static_info_v23_05_binary_parity(void)
     assert(r32(assembled_50, GP104_SINFO_OFF_NVLINK_CAPS) == 0x11223344U);
     assert(r64(assembled_50, GP104_SINFO_OFF_CORE + 0x00U) == 0xec000000ULL);
     assert(r64(assembled_50, GP104_SINFO_OFF_CORE + 0x08U) == 256ULL * 1024ULL * 1024ULL);
-    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0x60U), "535.309.01") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0x60U), NV_VGPU_DRIVER_VERSION_STR) == 0);
     assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0x260U), "GRID P4-4Q") == 0);
-    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xc00U), "535.309.01") == 0);
-    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xe68U), "r535_00") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xc00U), "580.196.07") == 0);
+    assert(strcmp((char *)(assembled_50 + GP104_SINFO_OFF_CORE + 0xe68U), "r580_00") == 0);
     assert(r32(assembled_50, GP104_SINFO_OFF_INTR_TABLE_1) == 0x55aa170dU);
     assert(r32(assembled_50, GP104_SINFO_OFF_FIFO_DEV_TABLE) == 0x77cc1112U);
     assert(r32(assembled_50, GP104_SINFO_OFF_INTR_TABLE_2) == 0x66bb170eU);

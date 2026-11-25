@@ -11,7 +11,7 @@ extern "C" {
 
 /* =========================================================================
  * Open MIT-compatible ABI definitions from kernel/nvidia-vgpu-vfio/nv-vgpu-ioctl.h
- * and open-gpu-kernel-modules RM ioctl interfaces (535.309.01).
+ * and open-gpu-kernel-modules RM ioctl interfaces (580.196.09).
  * ========================================================================= */
 
 typedef uint8_t  NvU8;
@@ -34,7 +34,7 @@ typedef uint32_t NV_STATUS;
 #define NV_ERR_INVALID_STATE         0x00000028U
 #define NV_ERR_TIMEOUT               0x00000065U
 
-#define NV_VGPU_DRIVER_VERSION_STR   "535.309.01"
+#define NV_VGPU_DRIVER_VERSION_STR   "580.196.09"
 
 /* nvidia-vgpu-vfio ioctl envelope */
 typedef struct {
@@ -84,11 +84,17 @@ enum {
 #define NV_VFIO_VGPU_EVENT_MAX_COUNT             11
 
 /* vGPU ctldev events */
-#define NV_VFIO_VGPU_CTLDEV_EVENT_CREATE_DEVICE  1
-#define NV_VFIO_VGPU_CTLDEV_EVENT_DELETE_DEVICE  2
-#define NV_VFIO_VGPU_CTLDEV_EVENT_OPEN_DEVICE    3
-#define NV_VFIO_VGPU_CTLDEV_EVENT_GET_INSTANCES  4
-#define NV_VFIO_VGPU_CTLDEV_EVENT_MAX_COUNT      5
+#define NV_VFIO_VGPU_CTLDEV_EVENT_CREATE_DEVICE      1
+#define NV_VFIO_VGPU_CTLDEV_EVENT_DELETE_DEVICE      2
+#define NV_VFIO_VGPU_CTLDEV_EVENT_OPEN_DEVICE        3
+#define NV_VFIO_VGPU_CTLDEV_EVENT_GET_INSTANCES      4
+typedef enum VGPU_SYSFS_OP {
+    SET_GPU_INSTANCE_ID = 0,
+    SET_PLACEMENT_ID    = 1,
+    GET_PLACEMENT_ID    = 2
+} VGPU_SYSFS_OP;
+#define NV_VFIO_VGPU_CTLDEV_EVENT_UPDATE_SYSFS_INFO  5
+#define NV_VFIO_VGPU_CTLDEV_EVENT_MAX_COUNT          6
 
 #define VM_UUID_SIZE                             16
 #define VGPU_UUID_SIZE                           16
@@ -103,8 +109,8 @@ enum {
 #define NV_VGPU_DEVICE_MIGRATION_REGION_OFFSET   0x20000000000ULL
 #define NV_VGPU_DEVICE_STAGING_REGION_OFFSET     0x30000000000ULL
 
-#define NV_MAX_VGPU_TYPE_PER_GPU                 0x40
-#define NV_VGPU_STRING_BUFFER_SIZE               32
+#define NV_MAX_VGPU_TYPE_PER_GPU                 0x80
+#define NV_VGPU_STRING_BUFFER_SIZE               64
 #define NV_VERSION_STRING_LENGTH                 256
 #define NV_VGPU_MAX_BAR_REGION_COUNT             4
 #define NV_VGPU_MAX_SPARSE_REGION_COUNT          5
@@ -121,7 +127,7 @@ typedef struct {
     char  vgpu_name[NV_VGPU_STRING_BUFFER_SIZE];
 } type_info_t;
 
-_Static_assert(sizeof(type_info_t) == 60, "type_info_t size");
+_Static_assert(sizeof(type_info_t) == 0x5c, "type_info_t size");
 
 /* Ctldev ioctl commands */
 #define NV_VFIO_VGPU_CTLDEV_SET_TYPES_INFO       NV_VGPU_CTL_IOCTL(0x1)
@@ -154,9 +160,11 @@ typedef struct {
     NvU32 vgpu_type_id;
     NvU32 num_vgpu_types;
     NvU32 vgpu_type_ids[NV_MAX_VGPU_TYPE_PER_GPU];
+    NvU32 sysfs_val;
+    VGPU_SYSFS_OP update_mode;
 } NV_VFIO_VGPU_CTLDEV_GET_EVENT_DATA_PARAMS;
 
-_Static_assert(sizeof(NV_VFIO_VGPU_CTLDEV_GET_EVENT_DATA_PARAMS) == 0x52c, "GET_EVENT_DATA size");
+_Static_assert(sizeof(NV_VFIO_VGPU_CTLDEV_GET_EVENT_DATA_PARAMS) == 0x634, "GET_EVENT_DATA size");
 
 #define NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA       NV_VGPU_CTL_IOCTL(0x5)
 typedef struct {
@@ -166,9 +174,12 @@ typedef struct {
     NvU32 num_vgpu_types;
     NvU32 vgpu_type_ids[NV_MAX_VGPU_TYPE_PER_GPU];
     NvU32 available_instances[NV_MAX_VGPU_TYPE_PER_GPU];
+    NvU32 gpu_instance_id;
+    NvU32 placement_id;
+    NvU32 sysfs_val;
 } NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA_PARAMS;
 
-_Static_assert(sizeof(NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA_PARAMS) == 0x210, "SET_EVENT_DATA size");
+_Static_assert(sizeof(NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA_PARAMS) == 0x41c, "SET_EVENT_DATA size");
 
 #define NV_VFIO_VGPU_CTLDEV_PROBE_GPU            NV_VGPU_CTL_IOCTL(0x6)
 typedef struct {
@@ -324,10 +335,11 @@ typedef struct {
     NvU64     sparseOffsets[NV_VGPU_MAX_SPARSE_REGION_COUNT];
     NvU64     sparseSizes[NV_VGPU_MAX_SPARSE_REGION_COUNT];
     NvU32     sparseCount;
+    NvBool    isBar064bit;
     NV_STATUS returnStatus;
 } NV_VFIO_VGPU_BAR_INFO_SET_DATA_PARAMS;
 
-_Static_assert(sizeof(NV_VFIO_VGPU_BAR_INFO_SET_DATA_PARAMS) == 0x78, "BAR_INFO_SET_DATA size");
+_Static_assert(sizeof(NV_VFIO_VGPU_BAR_INFO_SET_DATA_PARAMS) == 0x80, "BAR_INFO_SET_DATA size");
 
 /* =========================================================================
  * Open NVIDIA RM /dev/nvidiactl & /dev/nvidiaN Escape Ioctl Definitions
@@ -547,7 +559,7 @@ _Static_assert(sizeof(nv_ioctl_alloc_os_event_t) == 0x10, "alloc_os_event size")
 #define NVA081_CTRL_CMD_VGPU_CONFIG_SET_VM_NAME               0xa0810120U
 #define NVA081_CTRL_CMD_VGPU_CONFIG_GET_BAR_INFO              0xa0810121U
 
-/* RM parameter structures verified against vGPU 535.309.01 */
+/* RM parameter structures verified against vGPU 580.196.09 */
 typedef struct {
     NvU32 deviceId;
     NvU32 hClientShare;
@@ -578,11 +590,12 @@ typedef struct {
     char  driverVersionBuffer[256];
     char  versionBuffer[256];
     char  titleBuffer[256];
+    char  extraBuffer[256];
     NvU32 changelistNumber;
     NvU32 officialChangelistNumber;
 } NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS;
 
-_Static_assert(sizeof(NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS) == 0x308, "BUILD_VERSION_V2 size");
+_Static_assert(sizeof(NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS) == 0x408, "BUILD_VERSION_V2 size");
 
 typedef struct {
     NvU32 gpuId;
@@ -608,43 +621,46 @@ typedef struct {
     NvU32 firstVfOffset;
     NvU8  raw[0x43 - 8];
     NvU8  sriovEnabled;
-    NvU8  tail[0x48 - 0x44];
+    NvU8  tail[0x50 - 0x44];
 } NV2080_CTRL_GPU_GET_SRIOV_CAPS_PARAMS;
 
-_Static_assert(sizeof(NV2080_CTRL_GPU_GET_SRIOV_CAPS_PARAMS) == 0x48, "GET_SRIOV_CAPS size");
+_Static_assert(sizeof(NV2080_CTRL_GPU_GET_SRIOV_CAPS_PARAMS) == 0x50, "GET_SRIOV_CAPS size");
 
 typedef struct {
     NvU32 vgpuType;
+    NvU32 pgpuType;
     NvU32 numVgpuTypes;
     NvU32 vgpuTypes[NV_MAX_VGPU_TYPE_PER_GPU];
 } NVA081_CTRL_VGPU_CONFIG_GET_SUPPORTED_VGPU_TYPES_PARAMS;
 
-_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_SUPPORTED_VGPU_TYPES_PARAMS) == 0x108, "GET_SUPPORTED_VGPU_TYPES size");
+_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_SUPPORTED_VGPU_TYPES_PARAMS) == 0x20c, "GET_SUPPORTED_VGPU_TYPES size");
 
 typedef struct {
     NvU32 vgpuType;             /* +0x000 */
     NvU8  pad0[8];              /* +0x004 */
-    char  vgpuName[32];         /* +0x00c */
-    NvU8  raw_mid[0x14c - 0x2c];/* +0x02c */
-    NvU32 maxInstance;          /* +0x14c */
-    NvU32 numHeads;             /* +0x150 */
-    NvU32 maxResolutionX;       /* +0x154 */
-    NvU32 maxResolutionY;       /* +0x158 */
-    NvU32 pad1;                 /* +0x15c */
-    NvU32 frlConfig;            /* +0x160 */
-    NvU8  raw_mid2[0x188 - 0x164]; /* +0x164 */
-    NvU64 fbLength;             /* +0x188 */
-    NvU8  tail[0x1360 - 0x190]; /* +0x190 */
+    char  vgpuName[64];         /* +0x00c */
+    NvU8  raw_mid[0x18c - 0x4c];/* +0x04c */
+    NvU32 maxInstance;          /* +0x18c */
+    NvU32 numHeads;             /* +0x190 */
+    NvU32 maxResolutionX;       /* +0x194 */
+    NvU32 maxResolutionY;       /* +0x198 */
+    NvU32 pad1;                 /* +0x19c */
+    NvU32 frlConfig;            /* +0x1a0 */
+    NvU8  raw_mid2[0x1c8 - 0x1a4]; /* +0x1a4 */
+    NvU64 fbLength;             /* +0x1c8 (profileSize) */
+    NvU8  tail[0x1538 - 0x1d0]; /* +0x1d0 */
 } NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS;
 
-_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS) == 0x1360, "GET_VGPU_TYPE_INFO size");
+_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS) == 0x1538, "GET_VGPU_TYPE_INFO size");
 
 typedef struct {
-    NvU8 mdevUuid[VM_UUID_SIZE];
-    char vmName[128];
+    NvU32 vmIdType;
+    NvU32 pad0;
+    NvU8  mdevUuid[VM_UUID_SIZE];
+    char  vmName[128];
 } NVA081_CTRL_VGPU_CONFIG_SET_VM_NAME_PARAMS;
 
-_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_SET_VM_NAME_PARAMS) == 0x90, "SET_VM_NAME size");
+_Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_SET_VM_NAME_PARAMS) == 0x98, "SET_VM_NAME size");
 
 typedef struct {
     NvU32 gpuPciId;
@@ -655,7 +671,8 @@ typedef struct {
     NvU64 sparseOffsets[NV_VGPU_MAX_SPARSE_REGION_COUNT];
     NvU64 sparseSizes[NV_VGPU_MAX_SPARSE_REGION_COUNT];
     NvU32 sparseCount;
-    NvU32 pad1;
+    NvBool isBar064bit;
+    NvU8   pad1[3];
 } NVA081_CTRL_VGPU_CONFIG_GET_BAR_INFO_PARAMS;
 
 _Static_assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_BAR_INFO_PARAMS) == 0x490, "GET_BAR_INFO size");
@@ -667,9 +684,11 @@ typedef struct {
     NvU32 vgpuTypeId;
     NvU16 vgpuId;
     NvU16 pad;
+    NvU32 gpuInstanceId;
+    NvU32 placementId;
 } NV0000_CTRL_VGPU_CREATE_DEVICE_PARAMS;
 
-_Static_assert(sizeof(NV0000_CTRL_VGPU_CREATE_DEVICE_PARAMS) == 0x20, "VGPU_CREATE_DEVICE size");
+_Static_assert(sizeof(NV0000_CTRL_VGPU_CREATE_DEVICE_PARAMS) == 0x28, "VGPU_CREATE_DEVICE size");
 
 typedef struct __attribute__((packed)) {
     NvU8  mdevUuid[VM_UUID_SIZE];
@@ -686,7 +705,7 @@ typedef struct {
     NvU32 availableInstances[NV_MAX_VGPU_TYPE_PER_GPU];
 } NV0000_CTRL_VGPU_GET_INSTANCES_PARAMS;
 
-_Static_assert(sizeof(NV0000_CTRL_VGPU_GET_INSTANCES_PARAMS) == 0x20c, "VGPU_GET_INSTANCES size");
+_Static_assert(sizeof(NV0000_CTRL_VGPU_GET_INSTANCES_PARAMS) == 0x40c, "VGPU_GET_INSTANCES size");
 
 typedef struct {
     NvU32 status;

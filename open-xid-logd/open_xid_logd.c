@@ -300,7 +300,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--foreground") == 0) {
             foreground = 1;
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("open-nvidia-xid-logd 0.1.0 (535.309.01-vgpu-kvm compatible)\n");
+            printf("open-nvidia-xid-logd 0.1.0 (580.196.09-vgpu-kvm compatible)\n");
             return 0;
         }
     }

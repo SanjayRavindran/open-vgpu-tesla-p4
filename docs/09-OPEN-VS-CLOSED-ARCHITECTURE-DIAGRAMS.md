@@ -6,8 +6,8 @@ This document visualizes how clean-room open-source components, upstream open-so
 
 | Class | Meaning | Examples |
 | :--- | :--- | :--- |
-| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), `open-nvidia-vgpu-mgr` (C), `open-nvidia-smi` + `libopen-nvidia-ml.so` (C), `libopen-nvidia-vgpu.so` (C), `open-vgpu-guest` + `nova_vgpu_guest.ko` (C), `libopen-nvidia-encode.so` (C), `libopen-host-rm-gp104.so` (C), `open-gridd` (`nvidia-gridd`, C11), provisioning & PTX patch scripts |
-| Blue | **Upstream Open Source** | Linux KVM/VFIO/mdev, QEMU/OVMF/`swtpm`, FastAPI-DLS, GNOME 49.5, FreeRDP, Docker/Selkies, NVIDIA MIT/GPL kernel shims & R620 Wayland shims |
+| Green | **Clean-Room Open Source (Ours)** | `open-nvidia-vgpud` (Rust), `libopen-vgxcfg.so` (C), `open-nvidia-xid-logd` (C), `open-nvidia-vgpu-mgr` (C), `open-nvidia-smi` + `libopen-nvidia-ml.so` (C), `libopen-nvidia-vgpu.so` (C), `open-vgpu-guest` + `nova_vgpu_guest.ko` (C), `libopen-nvidia-encode.so` (C), `libopen-host-rm-gp104.so` (C), `open-gridd` (`nvidia-gridd`, C11), R580 provisioning & XML/`nv-pci.c` patch scripts |
+| Blue | **Upstream Open Source** | Linux KVM/VFIO/mdev, QEMU/OVMF/`swtpm`, FastAPI-DLS, GNOME 49.5, FreeRDP, Docker/Selkies, NVIDIA MIT/GPL kernel shims & R580 Wayland shims |
 | Red / Orange | **Closed Source (NVIDIA Proprietary)** | `nv-kernel.o_binary`, `libnvidia-vgpu.so`, signed Falcon blobs (`PrivSec=1`), Guest `nvlddmkm.sys` & `libcuda` |
 | Slate | **Closed Source OS / Client** | Windows 11 24H2 Kernel, DWM, `TermService` (`:3389`) |
 
@@ -30,7 +30,7 @@ flowchart TB
         MGR["open-nvidia-vgpu-mgr (C, 60 vmiop* exports & worker runtime)"]:::ours
         LIB_VGPU["libopen-nvidia-vgpu.so (C, 47/47 VRPCs + hybrid interposer)"]:::ours
         HOST_RM["libopen-host-rm-gp104.so (C, WPR1 LSF + 22 profiles + 50/50 CHID)"]:::ours
-        VMIOP_SO["libnvidia-vgpu.so.535.309.01 (Closed vmiop backend, hybrid fallback)"]:::closed
+        VMIOP_SO["libnvidia-vgpu.so.580.196.09 (Closed vmiop backend, hybrid fallback)"]:::closed
         SMI["open-nvidia-smi + libopen-nvidia-ml.so (C, clean-room RM telemetry & vGPU CLI)"]:::ours
         DLS["FastAPI-DLS v2 (:443, Docker or systemd venv)"]:::oss
         FAN["h61-fan-control (Python PWM >= 60C thermal loop)"]:::ours
@@ -43,9 +43,9 @@ flowchart TB
         BR0["Host Bridge br0 / vmbr0 (VLAN/LAN 192.168.1.0/24)"]:::oss
     end
 
-    subgraph H_KRN["Host Kernel Space (Linux 7.0.0-43 / Proxmox VE DKMS 535.309.01)"]
+    subgraph H_KRN["Host Kernel Space (Linux 7.0.0-43/44 / Proxmox VE DKMS 580.196.09)"]
         NV_SHIM["nvidia.ko OS Shim (Linux GPL/MIT DKMS wrapper)"]:::oss
-        NV_CORE["nv-kernel.o_binary (Closed RM Core & ioctl dispatch)"]:::closed
+        NV_CORE["nv-kernel.o_binary (Closed RM Core + 0xc85b7 bypass)"]:::closed
         VGPU_VFIO["nvidia-vgpu-vfio.ko (Open MIT KVM/VFIO mdev mediation driver)"]:::oss
         KVM_VFIO["Linux KVM, vfio-pci, mdev, iommu=pt"]:::oss
     end
@@ -95,27 +95,26 @@ flowchart TB
     classDef closed fill:#fee2e2,stroke:#b91c1c,stroke-width:2px,color:#7f1d1d
     classDef vhw fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
 
-    subgraph AL_APP["Desktop, Remote Display, and Container Layer (Pure Wayland)"]
+    subgraph AL_APP["Desktop, Remote Display, and Container Layer (Pure Wayland, X11-Stripped)"]
         GNOME["GNOME Shell 49.5 (--no-x11 --headless)"]:::oss
         GTK4["GTK4 Apps (GSK_RENDERER=ngl -> OpenGL 4.6 / EGL)"]:::oss
-        GRD["gnome-remote-desktop-headless (:3389 RDP + patched PTX sm_61)"]:::oss
-        PTX_PATCH["patch_grd_ptx_535.sh (Open PTX 8.5->8.2 CUDA 12.2 fix)"]:::ours
+        GRD["gnome-remote-desktop-headless (:3389 RDP, CUDA 13.0 + NVENC)"]:::oss
         SELKIES["Selkies Webtop Container (Docker CE + PixelFlux 10-bit 4:4:4 NVENC)"]:::oss
-        CDI["NVIDIA Container Toolkit (CDI, el10 .note.gnu.property stripped)"]:::oss
+        CDI["NVIDIA Container Toolkit (mode = cdi, /etc/cdi/nvidia.yaml, zero nvidia-xconfig)"]:::oss
     end
 
-    subgraph AL_USR["Hybrid Userspace Driver Stack (R620 Wayland + R535 Core)"]
-        EGL_WL["Open R620 Shims: libnvidia-egl-wayland, wayland2, gbm"]:::oss
+    subgraph AL_USR["R580 Userspace Driver Stack (580.196.07 Native Wayland/GBM, X11 Stripped)"]
+        EGL_WL["R580 Wayland/GBM Shims: 10_nvidia_wayland.json + 15_nvidia_gbm.json"]:::oss
         NVENC["libopen-nvidia-encode.so (Clean-Room C NVENC 13.0 -> NVC2B7/NVC06F RM, libc only)"]:::ours
-        NV_GL["Closed R535 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda, libnvcuvid"]:::closed
-        GRIDD["open-gridd (Clean-Room C11 NLS/DLS Daemon -> FastAPI-DLS :443)"]:::ours
-        AL_PROV["provision_linux_vgpu_guest.sh (Open setup automation)"]:::ours
+        NV_GL["Closed R580 Libraries: libEGL_nvidia, libnvidia-glcore, libcuda, libnvcuvid"]:::closed
+        GRIDD["nvidia-gridd + gridd-unlock-patcher / open-gridd (-> FastAPI-DLS :443)"]:::ours
+        AL_PROV["provision_linux_vgpu_guest.sh (--grid-580-run + --strip-x11)"]:::ours
     end
 
     subgraph AL_KRN["AlmaLinux 10.3 Guest Kernel & Virtual vGPU Hardware"]
-        DRM["Open Linux DRM/KMS + open-vgpu-guest / nova_vgpu_guest.ko (BAR0 VRPC + zero-blob overlay)"]:::ours
-        G_CORE["Closed R535 GRID nv-kernel.o_binary (optional guest fallback)"]:::closed
-        VDEV["Virtual PCIe 0000:00:03.0 (10de:1bb3 SUBSYS 1206 GRID P4-4Q, BAR0 0x8f000 VRPC)"]:::vhw
+        DRM["580.196.07 -m=kernel DKMS + patch_r580_guest_nv_pci.py (2-line 10de:1bb3 allowlist)"]:::ours
+        OPEN_G["open-vgpu-guest / nova_vgpu_guest.ko (Clean-Room BAR0 VRPC Research)"]:::ours
+        VDEV["Virtual PCIe 0000:00:03.0 (10de:1bb3 SUBSYS 11D8 GRID P4-4Q, BAR0 0x8f000 VRPC)"]:::vhw
     end
 
     PTX_PATCH -. "patches CUDA PTX kernel" .-> GRD
@@ -157,14 +156,14 @@ flowchart TB
         APPS["NVIDIA Control Panel (AppX 8.1.969.0) & GPU-Z"]:::closed
     end
 
-    subgraph W_DRV["NVIDIA WDDM 3.1 Driver 539.72 WHQL (Closed Proprietary)"]
+    subgraph W_DRV["NVIDIA WDDM 3.1 Driver 582.99 WHQL (Closed Proprietary)"]
         UMD["User-Mode Driver: D3D11/12, OpenGL, CUDA, NVENC DLLs"]:::closed
         DISP_SVC["NVDisplay.ContainerLocalSystem (ClientConfigToken -> FastAPI-DLS :443)"]:::closed
         KMD["nvlddmkm.sys (WDDM 3.1 Kernel Miniport Driver)"]:::closed
     end
 
     subgraph W_HW["Virtual PCIe Hardware (OVMF SecureBoot + swtpm TPM 2.0)"]
-        W_VDEV["Virtual PCIe GPU (VEN_10DE&DEV_1BB3&SUBSYS_120610DE GRID P4-4Q, VRPC)"]:::vhw
+        W_VDEV["Virtual PCIe GPU (VEN_10DE&DEV_1BB3&SUBSYS_11D810DE GRID P4-4Q, VRPC)"]:::vhw
     end
 
     AUTO -. "provisions OS + WinRM" .-> RDP
@@ -188,7 +187,7 @@ sequenceDiagram
     participant nvko as "Host nvidia.ko + nvidia-vgpu-vfio.ko (DKMS)"
     participant mgr as "Host open-nvidia-vgpu-mgr + libopen-nvidia-vgpu.so (Open C)"
     participant qemu as "QEMU/KVM + VFIO mdev"
-    participant guest as "Guest Driver (Alma open-vgpu-guest/R620 or Win11 539.72)"
+    participant guest as "Guest Driver (Alma 580.196.07 or Win11 582.99)"
     participant gridd as "Guest open-gridd (Open C11) / Win11 NLS"
     participant dls as "Host FastAPI-DLS (:443, Open)"
 
@@ -196,9 +195,9 @@ sequenceDiagram
     nvko-->>vgpud: "Creates /sys/.../mdev_supported_types/nvidia-65 (GRID P4-4Q)"
     qemu->>nvko: "Echo UUID -> nvidia-65/create (binds 2x 4096 MiB mdevs)"
     nvko->>mgr: "Spawn vGPU device plugin instances (50/50 scheduler + libopen-host-rm-gp104.so)"
-    guest->>qemu: "PCI probe 10de:1bb3 SUBSYS 1206 + BAR0 0x8f000 VRPC ring init"
+    guest->>qemu: "PCI probe 10de:1bb3 SUBSYS 11D8 + BAR0 0x8f000 VRPC ring init"
     qemu->>nvko: "Trap BAR0/config access -> forward VRPC"
-    nvko->>mgr: "VGPU-RPC SetGuestSystemInfo -> GetStaticInfo535 -> Alloc/Submit (47/47 VRPCs)"
+    nvko->>mgr: "VGPU-RPC SetGuestSystemInfo -> GetStaticInfo580 -> Alloc/Submit (47/47 VRPCs)"
     mgr->>nvko: "Schedule physical GP104 channels via signed Falcon blobs"
     gridd->>dls: "HTTPS .tok verify + PKCE (/auth/v1/origin -> /code -> /token) + POST /leasing/v1/lessor"
     dls-->>gridd: "Signed 90-day GRID-Virtual-WS lease (PUT /leasing/v1/lease/{ref} renew)"
@@ -219,15 +218,15 @@ sequenceDiagram
 | `open-nvidia-smi` / `libopen-nvidia-ml.so` | Host Userspace | **Ours** | Open (C, `libnvidia-ml.so.1`) | Direct `/dev/nvidiactl` RM telemetry (`0x2080*`, `0xa081*`), vGPU instance/type queries, and 89-col / CSV CLI |
 | `libopen-nvidia-vgpu.so` | Host Userspace | **Ours** | Open (C, `VER_5_0`/`VER_2_0` plugin) | Clean-room GP104 `vmiop` mediator (`47/47` VRPCs, PFN pinning, BAR1/USERD MMIO forwarding, `0x50` `67,416` B & `0x9c` `31,536` B serializers + hybrid interposer) |
 | `libopen-host-rm-gp104.so` | Host RM HAL Slice | **Ours** | Open (C, `open-host-rm/`) | Category #1 signed Falcon WPR1/ACR LSF header builder (`8/8` Falcons), `NV_PMC_ENABLE`/BAR1/BAR2 bringup, `22` vGPU profiles, 50/50 `GRID P4-4Q` (`2×2048` CHID) split |
-| `open-vgpu-guest` / `nova_vgpu_guest.ko` | Linux Guest Kernel | **Ours** | Open (C, `Dual MIT/GPL`) | BAR0 `0x8f000` `"VRPC"` guest transport (`GP_IN_RING` `0x80b`) + zero-blob `open-gpu-kernel-modules@535.309.01` `nvidia*.ko` overlay |
+| `open-vgpu-guest` / `nova_vgpu_guest.ko` | Linux Guest Kernel | **Ours** | Open (C, `Dual MIT/GPL`) | BAR0 `0x8f000` `"VRPC"` guest transport (`GP_IN_RING` `0x80b`) + zero-blob `open-gpu-kernel-modules` `nvidia*.ko` overlay |
 | `libopen-nvidia-encode.so` | Linux Guest Userspace | **Ours** | Open (C, `libnvidia-encode.so.1`) | Clean-room NVENC `13.0` (`0xd0`) library (`libc.so.6` only, `10/10` exports, `43/43` slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` `0xc2b7` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 + cached BL16 swizzle) |
 | `open-gridd` | Linux Guest Userspace | **Ours** | Open (C11, OpenSSL 3.x) | Clean-room Linux NLS/DLS licensing daemon (`/usr/bin/nvidia-gridd`): RSA-2048 JWT `.tok` check, PKCE auth, AES-256-GCM store, RM `0x20808161`/`0x20800187` status, live FastAPI-DLS verified |
 | `FastAPI-DLS` | Host Service | Upstream Open | Open (Python/Docker/systemd) | Issues TLS licensing tokens & leases (`192.168.1.24:443`) |
 | `nvidia-vgpu-vfio.ko` | Host Kernel | NVIDIA / DKMS | Open (MIT C) | KVM/VFIO `mdev` lifecycle and BAR0/VRPC trap forwarding |
-| `nvidia.ko` (`nv-kernel.o_binary`) | Host Kernel | NVIDIA Proprietary | Open OS shim + Closed core | Non-GSP Pascal physical silicon state machine, embedded Category #1 signed Falcon execution, channel scheduling |
-| `libnvidia-vgpu.so.535.309.01` | Host Userspace | NVIDIA Proprietary | Closed `.so` plugin (optional backend) | Retained behind `libopen-nvidia-vgpu.so` in hybrid mode for live 2-VM VRPC/DRM parity |
-| AlmaLinux `535` + `620` Stack | Linux Guest | Hybrid | Open R620 EGL/DRM + Closed R535 | Pure Wayland GNOME 49.5 + GTK4 (`ngl`) + CUDA PTX patched RDP + Selkies |
-| Windows 11 `539.72 WHQL` Stack | Windows Guest | Closed + Open scripts | Closed WDDM + Open `.ps1`/XML | WDDM 3.1 DX12/CUDA/NVENC + policy-fixed RDP `:3389` without `0x200d` |
+| `nvidia.ko` (`nv-kernel.o_binary`) | Host Kernel | NVIDIA Proprietary | Open OS shim + Closed core | Non-GSP Pascal physical silicon state machine, embedded Category #1 signed Falcon execution, channel scheduling (`0xc85b7` bypass on `580.196.09`) |
+| `libnvidia-vgpu.so.580.196.09` | Host Userspace | NVIDIA Proprietary | Closed `.so` plugin (optional backend) | Retained behind `libopen-nvidia-vgpu.so` in hybrid mode (`/opt/nvidia-vgpu-580/`) for live 2-VM VRPC/DRM parity |
+| AlmaLinux `580.196.07` Stack | Linux Guest | Native R580 + Open | Open EGL/DRM/NVENC + R580 GRID | Pure Wayland GNOME 49.5 + GTK4 (`ngl`) + native CUDA `13.0` + Selkies |
+| Windows 11 `582.99 WHQL` Stack | Windows Guest | Closed + Open scripts | Closed WDDM + Open `.ps1`/XML | WDDM 3.1 DX12/CUDA/NVENC (`SUBSYS_11D810DE`) + policy-fixed RDP `:3389` without `0x200d` |
 
 ---
 

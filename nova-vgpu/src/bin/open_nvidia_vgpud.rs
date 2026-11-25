@@ -24,7 +24,7 @@ fn run() -> Result<(), String> {
         match args[i].as_str() {
             "--dry-run" => dry_run = true,
             "--version" => {
-                println!("open-nvidia-vgpud 0.1.0 (535.309.01-vgpu-kvm compatible)");
+                println!("open-nvidia-vgpud 0.1.0 (580.196.09-vgpu-kvm compatible)");
                 return Ok(());
             }
             "--config" => {

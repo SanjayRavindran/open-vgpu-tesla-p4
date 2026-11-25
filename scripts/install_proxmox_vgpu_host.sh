@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Dedicated End-to-End Proxmox VE 8 / 9 Host Configurator & vGPU Installer
-# for NVIDIA Tesla P4 (GP104GL, 10de:1bb3) 535.309.01-vgpu-kvm:
+# for NVIDIA Tesla P4 (GP104GL, 10de:1bb3) 580.196.09-vgpu-kvm:
 #   1. Optionally configures Proxmox pve-no-subscription APT repository
 #   2. Installs proxmox-headers-$(uname -r) / pve-headers-$(uname -r), DKMS, mdevctl, cargo, gcc, python3-venv
 #   3. Configures Intel/AMD IOMMU (intel_iommu=on / amd_iommu=on iommu=pt) in GRUB & proxmox-boot-tool (/etc/kernel/cmdline)
 #   4. Configures /etc/modules, /etc/modules-load.d/nvidia-vgpu.conf, /etc/modprobe.d/blacklist-nouveau.conf & update-initramfs
-#   5. Builds & installs DKMS nvidia-vgpu-kvm/535.309.01 + all 8 clean-room open-source host daemons/libraries
+#   5. Builds & installs DKMS nvidia-vgpu-kvm/580.196.09 + all 8 clean-room open-source host daemons/libraries
 #   6. Installs native systemd FastAPI-DLS license server (/opt/fastapi-dls/.venv)
 #   7. Optionally creates or imports the 50/50 GRID P4-4Q VMs (VMID 101 vm-alma + VMID 102 vm-win11)
 
@@ -30,10 +30,10 @@ DRY_RUN=0
 
 usage() {
   cat <<'EOF'
-Usage: install_proxmox_vgpu_host.sh --run-file <NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run> [options]
+Usage: install_proxmox_vgpu_host.sh --run-file <NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run> [options]
 
 Host & Driver Options:
-  --run-file <path>              Path to NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run (required unless --dry-run)
+  --run-file <path>              Path to NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run (required unless --dry-run)
   --enable-no-subscription-repo  Configure Proxmox pve-no-subscription APT repo & disable enterprise repo lockouts
   --skip-build-open              Use prebuilt open-source host daemon binaries without invoking cargo/gcc
 
@@ -108,7 +108,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     exit 1
   fi
   if [ -z "$RUN_FILE" ] || [ ! -f "$RUN_FILE" ]; then
-    echo "Missing --run-file <NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run>." >&2
+    echo "Missing --run-file <NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run>." >&2
     exit 1
   fi
 fi

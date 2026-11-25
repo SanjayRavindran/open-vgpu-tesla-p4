@@ -21,8 +21,8 @@ description: >-
 # Host/sandbox unit + ABI differential test
 make -C open-nvenc clean all test diff-test
 
-# Hardware GP104 encode + PSNR/SSIM differential test (on GPU host or vGPU guest)
-# All 5 hardware test cases beat vendor 535.309.01 PSNR/SSIM parity
+# Hardware GP104 encode + PSNR/SSIM differential test (on R580 GPU host or vGPU guest)
+# All 5 hardware test cases pass PSNR/SSIM parity against vendor libnvidia-encode.so
 make -C open-nvenc hw-test diff-hw-test
 ```
 

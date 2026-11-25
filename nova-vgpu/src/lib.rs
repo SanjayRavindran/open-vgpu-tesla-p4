@@ -1,5 +1,5 @@
 //! Clean-room Rust reimplementation of the NVIDIA Pascal (`GP104GL` / Tesla P4)
-//! KVM vGPU software stack analyzed from `NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run`.
+//! KVM vGPU software stack targeting R580 (`580.196.09-vgpu-kvm`).
 //!
 //! Hardware Falcon security (`PrivSec = 1`) requires NVIDIA's signed Falcon
 //! binaries (`ACR`, `PMU`, `SEC2`, `FECS`, `GPCCS`, `NVENC`, `NVDEC`, `GR Netlist`),
@@ -161,21 +161,21 @@ mod tests {
         );
         assert_eq!(packed.raw[0], 1);
         assert_eq!(u32::from_le_bytes(packed.raw[0x008..0x00c].try_into().unwrap()), 63);
-        assert_eq!(packed.raw[0x04c], 0x2f);
-        let lic_end = packed.raw[0x0cc..0x14c].iter().position(|&b| b == 0).unwrap();
+        assert_eq!(packed.raw[0x08c], 0x2f);
+        let lic_end = packed.raw[0x10c..0x18c].iter().position(|&b| b == 0).unwrap();
         assert_eq!(
-            std::str::from_utf8(&packed.raw[0x0cc..0x0cc + lic_end]).unwrap(),
+            std::str::from_utf8(&packed.raw[0x10c..0x10c + lic_end]).unwrap(),
             "Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0"
         );
-        assert_eq!(u64::from_le_bytes(packed.raw[0x180..0x188].try_into().unwrap()), 0x1bb3);
-        let extra_end = packed.raw[0x344..0x1344].iter().position(|&b| b == 0).unwrap();
+        assert_eq!(u64::from_le_bytes(packed.raw[0x1c0..0x1c8].try_into().unwrap()), 0x1bb3);
+        let extra_end = packed.raw[0x388..0x1388].iter().position(|&b| b == 0).unwrap();
         assert_eq!(
-            std::str::from_utf8(&packed.raw[0x344..0x344 + extra_end]).unwrap(),
+            std::str::from_utf8(&packed.raw[0x388..0x388 + extra_end]).unwrap(),
             "vgpu_extra=1"
         );
-        assert_eq!(u32::from_le_bytes(packed.raw[0x1348..0x134c].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(packed.raw[0x1350..0x1354].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(packed.raw[0x1360..0x1364].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packed.raw[0x138c..0x1390].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packed.raw[0x1398..0x139c].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packed.raw[0x1538..0x153c].try_into().unwrap()), 1);
     }
 
     #[test]

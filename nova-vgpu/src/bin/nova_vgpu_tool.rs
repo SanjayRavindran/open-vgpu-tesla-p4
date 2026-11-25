@@ -1,7 +1,7 @@
 //! Safe inspection & verification CLI for `nova-vgpu` on a Pascal KVM host.
 //!
 //! Never writes to BAR0 registers or unloads active drivers; performs read-only PCI sysfs
-//! inspection, parses `vgpuConfig.xml`, validates extracted `535.309.01` Falcon blobs using
+//! inspection, parses `vgpuConfig.xml`, validates extracted GP104 Falcon blobs using
 //! `nova_vgpu::falcon_blobs`, and runs an end-to-end virtual `GP104` vGPU simulation.
 
 use nova_vgpu::falcon_blobs::{
@@ -22,11 +22,11 @@ fn main() {
     let xml_path = args
         .get(1)
         .map(String::as_str)
-        .unwrap_or("/home/zero/vgpu-work/vgpu-kvm-535.309.01/vgpuConfig.xml");
+        .unwrap_or("/usr/share/nvidia/vgpu/vgpuConfig.xml");
     let blobs_dir = args
         .get(2)
         .map(String::as_str)
-        .unwrap_or("/home/zero/vgpu-work/gp104-vgpu-535");
+        .unwrap_or("/home/zero/vgpu-work/gp104-vgpu");
 
     println!("=== 1. Read-Only VM PCI Sysfs Check (0000:01:00.0) ===");
     probe_sysfs_pci("/sys/bus/pci/devices/0000:01:00.0");
@@ -63,7 +63,7 @@ fn main() {
         );
     }
 
-    println!("\n=== 3. Verify 535.309.01 GP104 Falcon Blobs via nova-pascal ({}) ===", blobs_dir);
+    println!("\n=== 3. Verify GP104 Falcon Blobs via nova-pascal ({}) ===", blobs_dir);
     verify_falcon_blobs(Path::new(blobs_dir));
 
     println!("\n=== 4. End-to-End Clean-Room Rust GP104 vGPU Lifecycle Simulation ===");

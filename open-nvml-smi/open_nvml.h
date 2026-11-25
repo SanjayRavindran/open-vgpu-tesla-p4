@@ -1,6 +1,6 @@
 /*
  * Clean-room open-source NVML header (open_nvml.h)
- * Verified against NVIDIA 535.309.01-vgpu-kvm RM ioctls & REA 6.10.1 analysis.
+ * Verified against NVIDIA 580.196.09-vgpu-kvm RM ioctls & REA 6.10.1 analysis.
  */
 #ifndef OPEN_NVML_H
 #define OPEN_NVML_H
@@ -13,8 +13,8 @@ extern "C" {
 #endif
 
 #define NVML_API_VERSION                12
-#define NVML_API_VERSION_STR            "12.535.309.01"
-#define NVML_DEFAULT_DRIVER_VERSION_STR "535.309.01"
+#define NVML_API_VERSION_STR            "12.580.196.09"
+#define NVML_DEFAULT_DRIVER_VERSION_STR "580.196.09"
 
 #define NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE 80
 #define NVML_SYSTEM_NVML_VERSION_BUFFER_SIZE   80

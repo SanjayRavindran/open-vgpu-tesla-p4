@@ -1,5 +1,5 @@
 //! Clean-room Rust parser for NVIDIA `vgpuConfig.xml` (`libnvidia-vgxcfg.so` reimplementation)
-//! and `NVA081_CTRL_VGPU_CONFIG_SET_INFO_PARAMS` (`0x1368` bytes) builder.
+//! and `NVA081_CTRL_VGPU_CONFIG_SET_INFO_PARAMS` (`0x1540` bytes) builder.
 
 use crate::{VgpuError, VgpuResult};
 
@@ -193,16 +193,16 @@ pub fn expand_license_string(raw: &str) -> VgpuResult<String> {
     Ok(parts.join(";"))
 }
 
-/// Wire-accurate layout of `NVA081_CTRL_VGPU_CONFIG_SET_INFO_PARAMS` (`0x1368` = `4968` bytes)
-/// observed in `nvidia-vgpud` (`0x402ca0.c`) for RM control `0xa0810101`.
+/// Wire-accurate layout of `NVA081_CTRL_VGPU_CONFIG_SET_INFO_PARAMS` (`0x1540` = `5440` bytes)
+/// for RM control `0xa0810101` (`580.196.09-vgpu-kvm`, widened 64-byte `vgpuName`/`vgpuClass` + tail).
 #[repr(C)]
 #[derive(Clone)]
 pub struct Nva081SetInfoParams {
-    pub raw: [u8; 0x1368],
+    pub raw: [u8; 0x1540],
 }
 
 impl Nva081SetInfoParams {
-    /// Pack a `VgpuProfile` and `SupportedVgpuEntry` into the `0x1368`-byte RM struct.
+    /// Pack a `VgpuProfile` and `SupportedVgpuEntry` into the R580 `0x1540`-byte RM struct.
     pub fn from_profile(
         profile: &VgpuProfile,
         supported: &SupportedVgpuEntry,
@@ -218,7 +218,7 @@ impl Nva081SetInfoParams {
         )
     }
 
-    /// Pack a `VgpuProfile` and `SupportedVgpuEntry` for a specific physical GPU device ID.
+    /// Pack a `VgpuProfile` and `SupportedVgpuEntry` into the R580 `0x1540`-byte RM struct.
     pub fn from_profile_for_pgpu(
         profile: &VgpuProfile,
         supported: &SupportedVgpuEntry,
@@ -226,76 +226,44 @@ impl Nva081SetInfoParams {
         is_last: bool,
         first_flag: bool,
     ) -> Self {
-        let mut raw = [0u8; 0x1368];
-        // Offsets relative to local_13a8 in nvidia-vgpud (0x402ca0.c):
-        // +0x000: u8 first_flag (local_1a5a)
-        // +0x008: u32 vgpu_type_id (local_13a0)
-        // +0x00c: char[32] name (local_139c)
-        // +0x02c: char[32] class (local_137c)
-        // +0x04c: [u8; 128] digest (local_135c)
-        // +0x0cc: char[128] expanded license (local_12dc)
-        // +0x14c: u32 max_instance (local_125c)
-        // +0x150: u32 num_heads (local_1258)
-        // +0x154: u32 display_width (local_1254)
-        // +0x158: u32 display_height (local_1250)
-        // +0x15c: u32 max_pixels (local_124c)
-        // +0x160: u32 frl_config (local_1248)
-        // +0x164: u32 cuda_enabled (local_1244)
-        // +0x168: u32 ecc_supported (local_1240)
-        // +0x16c: u32 gpu_instance_size (local_123c)
-        // +0x170: u32 multi_vgpu_supported (local_1238)
-        // +0x178: u64 ((device_id << 16) | subsystem_id) (local_1230)
-        // +0x180: u64 pgpu_device_id (local_1228)
-        // +0x188: u64 profile_size (local_1220)
-        // +0x190: u64 framebuffer (local_1218)
-        // +0x198: u64 gsp_heap_size (local_1210)
-        // +0x1a0: u64 fb_reservation (local_1208)
-        // +0x1a8: u64 mappable_video_size (local_1200)
-        // +0x1b0: u32 encoder_capacity (local_11f8)
-        // +0x1b8: u64 bar1_length_mb (local_11f0)
-        // +0x1c0: u32 frame_rate_limiter (local_11e8)
-        // +0x344: char[4096] extra_parameters (local_1064)
-        // +0x1348: u32 gpu_direct_supported (local_60)
-        // +0x134c: u32 nvlink_p2p_supported (local_5c)
-        // +0x1350: u32 multi_vgpu_exclusive (local_58)
-        // +0x1360: u32 end_state (1 = normal, 2 = last) (local_48)
+        let mut raw = [0u8; 0x1540];
         let expanded_license =
             expand_license_string(&profile.license).unwrap_or_else(|_| profile.license.clone());
         raw[0] = u8::from(first_flag);
         put_u32(&mut raw, 0x008, profile.id);
-        put_cstr(&mut raw, 0x00c, 32, &profile.name);
-        put_cstr(&mut raw, 0x02c, 32, &profile.class_name);
-        raw[0x04c..0x04c + VGPU_DIGEST_BYTES].copy_from_slice(&supported.digest);
-        put_cstr(&mut raw, 0x0cc, 128, &expanded_license);
-        put_u32(&mut raw, 0x14c, supported.max_vgpus);
-        put_u32(&mut raw, 0x150, profile.num_heads);
-        put_u32(&mut raw, 0x154, profile.display_width);
-        put_u32(&mut raw, 0x158, profile.display_height);
-        put_u32(&mut raw, 0x15c, profile.max_pixels);
-        put_u32(&mut raw, 0x160, profile.frl_config);
-        put_u32(&mut raw, 0x164, u32::from(profile.cuda_enabled));
-        put_u32(&mut raw, 0x168, u32::from(profile.ecc_supported));
-        put_u32(&mut raw, 0x16c, profile.gpu_instance_size);
-        put_u32(&mut raw, 0x170, u32::from(profile.multi_vgpu_supported));
+        put_cstr(&mut raw, 0x00c, 64, &profile.name);
+        put_cstr(&mut raw, 0x04c, 64, &profile.class_name);
+        raw[0x08c..0x08c + VGPU_DIGEST_BYTES].copy_from_slice(&supported.digest);
+        put_cstr(&mut raw, 0x10c, 128, &expanded_license);
+        put_u32(&mut raw, 0x18c, supported.max_vgpus);
+        put_u32(&mut raw, 0x190, profile.num_heads);
+        put_u32(&mut raw, 0x194, profile.display_width);
+        put_u32(&mut raw, 0x198, profile.display_height);
+        put_u32(&mut raw, 0x19c, profile.max_pixels);
+        put_u32(&mut raw, 0x1a0, profile.frl_config);
+        put_u32(&mut raw, 0x1a4, u32::from(profile.cuda_enabled));
+        put_u32(&mut raw, 0x1a8, u32::from(profile.ecc_supported));
+        put_u32(&mut raw, 0x1ac, profile.gpu_instance_size);
+        put_u32(&mut raw, 0x1b0, u32::from(profile.multi_vgpu_supported));
         let packed_dev =
             ((profile.dev_id.device_id as u64) << 16) | (profile.dev_id.subsystem_id as u64);
-        put_u64(&mut raw, 0x178, packed_dev);
-        put_u64(&mut raw, 0x180, pgpu_device_id as u64);
-        put_u64(&mut raw, 0x188, profile.profile_size);
-        put_u64(&mut raw, 0x190, profile.framebuffer);
-        put_u64(&mut raw, 0x198, profile.gsp_heap_size);
-        put_u64(&mut raw, 0x1a0, profile.fb_reservation);
-        put_u64(&mut raw, 0x1a8, profile.mappable_video_size);
-        put_u32(&mut raw, 0x1b0, profile.encoder_capacity);
-        put_u64(&mut raw, 0x1b8, profile.bar1_length_mb);
-        put_u32(&mut raw, 0x1c0, u32::from(profile.frame_rate_limiter));
+        put_u64(&mut raw, 0x1b8, packed_dev);
+        put_u64(&mut raw, 0x1c0, pgpu_device_id as u64);
+        put_u64(&mut raw, 0x1c8, profile.profile_size);
+        put_u64(&mut raw, 0x1d0, profile.framebuffer);
+        put_u64(&mut raw, 0x1d8, profile.gsp_heap_size);
+        put_u64(&mut raw, 0x1e0, profile.fb_reservation);
+        put_u64(&mut raw, 0x1e8, profile.mappable_video_size);
+        put_u32(&mut raw, 0x1f0, profile.encoder_capacity);
+        put_u64(&mut raw, 0x1f8, profile.bar1_length_mb);
+        put_u32(&mut raw, 0x200, u32::from(profile.frame_rate_limiter));
         if !profile.extra_parameters.is_empty() {
-            put_cstr(&mut raw, 0x344, 4096, &profile.extra_parameters);
+            put_cstr(&mut raw, 0x388, 4096, &profile.extra_parameters);
         }
-        put_u32(&mut raw, 0x1348, profile.gpu_direct_supported);
-        put_u32(&mut raw, 0x134c, profile.nvlink_p2p_supported);
-        put_u32(&mut raw, 0x1350, profile.multi_vgpu_exclusive);
-        put_u32(&mut raw, 0x1360, if is_last { 2 } else { 1 });
+        put_u32(&mut raw, 0x138c, profile.gpu_direct_supported);
+        put_u32(&mut raw, 0x1390, profile.nvlink_p2p_supported);
+        put_u32(&mut raw, 0x1398, profile.multi_vgpu_exclusive);
+        put_u32(&mut raw, 0x1538, if is_last { 2 } else { 1 });
         Self { raw }
     }
 }

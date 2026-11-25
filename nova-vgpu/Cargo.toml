@@ -3,7 +3,7 @@ name = "nova-vgpu"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0"
-description = "Clean-room Rust reimplementation of NVIDIA Pascal (GP104 / Tesla P4) KVM vGPU stack analyzed from R535.309.01"
+description = "Clean-room Rust reimplementation of NVIDIA Pascal (GP104 / Tesla P4) KVM vGPU stack for R580 (580.196.09)"
 
 [dependencies]
 

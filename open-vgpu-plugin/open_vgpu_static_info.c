@@ -115,7 +115,7 @@ static void populate_vgpu_static_info_0x50(gp104_vgpu_dev_t *dev)
     sw32(core, 0x28U, (sdid << 16) | did);
     sw64(core, 0x40U, dev->rm.p2p_cap);
     snprintf((char *)(core + 0x60U), 255U, "%s", NV_VGPU_DRIVER_VERSION_STR);
-    snprintf((char *)(core + 0x160U), 255U, "r535_00");
+    snprintf((char *)(core + 0x160U), 255U, "r580_00");
     snprintf((char *)(core + 0x260U), 255U, "%.254s", pname ? pname : "GRID P4-4Q");
     snprintf((char *)(core + 0x360U), 255U, "open-pascal-vgpu %s", NV_VGPU_DRIVER_VERSION_STR);
 

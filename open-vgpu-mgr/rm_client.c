@@ -409,6 +409,28 @@ static void close_all_card_fds_locked(void)
     init_card_fds_locked();
 }
 
+static void detect_proc_driver_version(char *out, size_t out_sz)
+{
+    snprintf(out, out_sz, "%s", NV_VGPU_DRIVER_VERSION_STR);
+    FILE *fp = fopen("/proc/driver/nvidia/version", "r");
+    if (!fp) return;
+    char line[256];
+    if (fgets(line, sizeof(line), fp)) {
+        const char *p = strstr(line, "Kernel Module");
+        if (p) {
+            p += 13;
+            while (*p == ' ' || *p == '\t') p++;
+            size_t i = 0;
+            while (p[i] && p[i] != ' ' && p[i] != '\t' && p[i] != '\n' && i + 1 < out_sz) {
+                out[i] = p[i];
+                i++;
+            }
+            if (i > 0) out[i] = '\0';
+        }
+    }
+    fclose(fp);
+}
+
 static int init_ctl_locked(NV_STATUS *status_out)
 {
     *status_out = NV_OK;
@@ -432,7 +454,7 @@ static int init_ctl_locked(NV_STATUS *status_out)
 
     nv_ioctl_rm_api_version_t ver;
     memset(&ver, 0, sizeof(ver));
-    snprintf(ver.versionString, sizeof(ver.versionString), "%s", NV_VGPU_DRIVER_VERSION_STR);
+    detect_proc_driver_version(ver.versionString, sizeof(ver.versionString));
     const char *no_check = getenv("__RM_NO_VERSION_CHECK");
     if (no_check && no_check[0] == '1') {
         ver.cmd = 0x31U;

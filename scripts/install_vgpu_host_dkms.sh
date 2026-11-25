@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reproducible DKMS host installer for NVIDIA 535.309.01-vgpu-kvm on:
+# Reproducible DKMS host installer for NVIDIA 580.196.09-vgpu-kvm on:
 #   - Ubuntu 24.04 / 26.04 KVM hosts
 #   - Proxmox VE 8 / 9 hosts
 # Packages nvidia.ko + nvidia-vgpu-vfio.ko under DKMS and installs our clean-room
 # open-source host daemons (open-nvidia-vgpud, libopen-vgxcfg.so, open-nvidia-xid-logd,
-# open-nvidia-vgpu-mgr) alongside the proven stable libnvidia-vgpu/nvidia-smi host components.
+# open-nvidia-vgpu-mgr, open-nvidia-smi, libopen-nvidia-ml.so) alongside libnvidia-vgpu.so.
 
 RUN_FILE=""
 OPEN_VGPUD=""
@@ -18,10 +18,10 @@ DRY_RUN=0
 
 usage() {
   cat <<'EOF'
-Usage: install_vgpu_host_dkms.sh --run-file <NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run> [options]
+Usage: install_vgpu_host_dkms.sh --run-file <NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run> [options]
 
 Options:
-  --run-file <path>       Path to NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run (required unless --dry-run)
+  --run-file <path>       Path to NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run (required unless --dry-run)
   --open-vgpud <path>     Prebuilt open-nvidia-vgpud binary (optional; auto-built if cargo present)
   --open-vgxcfg <path>    Prebuilt libopen-vgxcfg.so library (optional; auto-built if gcc present)
   --open-xid-logd <path>  Prebuilt open-nvidia-xid-logd binary (optional; auto-built if gcc present)
@@ -49,9 +49,9 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PKG_NAME="nvidia-vgpu-kvm"
-PKG_VER="535.309.01"
+PKG_VER="580.196.09"
 DKMS_SRC="/usr/src/${PKG_NAME}-${PKG_VER}"
-OPT_DIR="/opt/nvidia-vgpu-535"
+OPT_DIR="/opt/nvidia-vgpu-580"
 KVER="$(uname -r)"
 
 IS_PROXMOX=0
@@ -73,7 +73,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     exit 1
   fi
   if [ -z "$RUN_FILE" ] || [ ! -f "$RUN_FILE" ]; then
-    echo "Missing --run-file <NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run>." >&2
+    echo "Missing --run-file <NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run>." >&2
     exit 1
   fi
 fi
@@ -148,26 +148,47 @@ fi
 
 # 3. Extract NVIDIA .run payload & register DKMS
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "[dry-run] Extract ${RUN_FILE:-NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run} -> ${DKMS_SRC}"
+  echo "[dry-run] Extract ${RUN_FILE:-NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run} -> ${DKMS_SRC}"
+  echo "[dry-run] Patch _nv060499rm RSA check in nv-kernel.o_binary (0xc85b7) for Tesla P4 vgpuConfig.xml"
+  echo "[dry-run] Patch /usr/share/nvidia/vgpu/vgpuConfig.xml via tools/patch_r580_vgpu_config_xml.py (10de:1bb3 / SUBSYS_11D8)"
   echo "[dry-run] Write ${DKMS_SRC}/dkms.conf (nvidia + nvidia-vgpu-vfio -> /updates/dkms)"
   echo "[dry-run] dkms add -m ${PKG_NAME} -v ${PKG_VER} && dkms build -m ${PKG_NAME} -v ${PKG_VER} && dkms install -m ${PKG_NAME} -v ${PKG_VER}"
   echo "[dry-run] Install ${OPT_DIR}/{nvidia-vgpu-mgr,nvidia-smi,open-nvidia-vgpud->nvidia-vgpud,open-nvidia-xid-logd->nvidia-xid-logd} and lib/"
-  echo "[dry-run] Configure /etc/modprobe.d/blacklist-nouveau.conf and /etc/modules-load.d/nvidia-vgpu.conf (remove stale nvidia-p4.conf)"
-  echo "[dry-run] Write systemd units: nvidia-vgpud.service (Type=oneshot), nvidia-vgpu-mgr.service, nvidia-xid-logd.service"
+  echo "[dry-run] Configure /etc/modprobe.d/blacklist-nouveau.conf and /etc/modules-load.d/nvidia-vgpu.conf"
+  echo "[dry-run] Write systemd units: nvidia-vgpud.service (Type=oneshot), nvidia-vgpu-mgr.service (clean LD_LIBRARY_PATH), nvidia-xid-logd.service"
   exit 0
 fi
 
-TMP_EXTRACT="$(mktemp -d /tmp/vgpu535_dkms.XXXXXX)"
+TMP_EXTRACT="$(mktemp -d /tmp/vgpu580_dkms.XXXXXX)"
 trap 'rm -rf "$TMP_EXTRACT"' EXIT
 bash "$RUN_FILE" --extract-only --target "$TMP_EXTRACT/pkg" >/dev/null
 
-# Remove any prior DKMS registration of this version cleanly
+# Remove any prior DKMS registration of this version or deprecated R535 cleanly
+if dkms status -m "$PKG_NAME" -v "535.309.01" | grep -q "$PKG_NAME"; then
+  dkms remove -m "$PKG_NAME" -v "535.309.01" --all || true
+fi
 if dkms status -m "$PKG_NAME" -v "$PKG_VER" | grep -q "$PKG_NAME"; then
   dkms remove -m "$PKG_NAME" -v "$PKG_VER" --all || true
 fi
 rm -rf "$DKMS_SRC"
 mkdir -p "$DKMS_SRC"
 cp -a "$TMP_EXTRACT/pkg/kernel/." "$DKMS_SRC/"
+
+# Bypass _nv060499rm RSA signature validation at file offset 0xc85b7 (.text+0xc8577)
+# so Tesla P4 (10de:1bb3) vgpuConfig.xml profiles load cleanly on 580.196.09.
+python3 - "${DKMS_SRC}/nvidia/nv-kernel.o_binary" <<'PY'
+import sys
+path = sys.argv[1]
+off = 0xc85b7
+expected = bytes.fromhex("31d2be80000000488d7d50")
+patch = bytes.fromhex("4531ede9c9000000909090")
+with open(path, "r+b") as f:
+    f.seek(off)
+    cur = f.read(11)
+    assert cur == expected, f"Unexpected bytes at {hex(off)}: {cur.hex()} != {expected.hex()}"
+    f.seek(off)
+    f.write(patch)
+PY
 
 cat >"${DKMS_SRC}/dkms.conf" <<EOF
 PACKAGE_NAME="${PKG_NAME}"
@@ -191,7 +212,7 @@ dkms build -m "$PKG_NAME" -v "$PKG_VER" -k "$KVER"
 dkms install --force -m "$PKG_NAME" -v "$PKG_VER" -k "$KVER"
 depmod -a "$KVER"
 
-# 4. Install userspace runtime in /opt/nvidia-vgpu-535 (open daemons + stable data plane)
+# 4. Install userspace runtime in /opt/nvidia-vgpu-580 (open daemons + libnvidia-vgpu.so)
 mkdir -p "${OPT_DIR}/lib" /usr/share/nvidia/vgpu /usr/share/nvidia/vgx
 install -m 0755 "$OPEN_VGPUD" "${OPT_DIR}/nvidia-vgpud"
 install -m 0755 "$OPEN_XID_LOGD" "${OPT_DIR}/nvidia-xid-logd"
@@ -200,8 +221,10 @@ install -m 0755 "$OPEN_VGXCFG" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.${PKG_VER}"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so.1"
 ln -sf "libnvidia-vgxcfg.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgxcfg.so"
 if [ -f "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" ] && [ -f "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" ]; then
-  install -m 0755 "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" "${OPT_DIR}/open-nvidia-smi"
-  install -m 0755 "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" "${OPT_DIR}/libopen-nvidia-ml.so"
+  install -m 0755 "$REPO_ROOT/open-nvml-smi/open-nvidia-smi" "${OPT_DIR}/nvidia-smi"
+  install -m 0755 "$REPO_ROOT/open-nvml-smi/libopen-nvidia-ml.so" "${OPT_DIR}/lib/libnvidia-ml.so.${PKG_VER}"
+  ln -sf "libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so.1"
+  ln -sf "libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so"
 fi
 if [ -f "$REPO_ROOT/open-vgpu-plugin/libopen-nvidia-vgpu.so" ]; then
   install -m 0755 "$REPO_ROOT/open-vgpu-plugin/libopen-nvidia-vgpu.so" "${OPT_DIR}/lib/libopen-nvidia-vgpu.so"
@@ -210,26 +233,35 @@ if [ -f "$REPO_ROOT/open-host-rm/libopen-host-rm-gp104.so" ]; then
   install -m 0755 "$REPO_ROOT/open-host-rm/libopen-host-rm-gp104.so" "${OPT_DIR}/lib/libopen-host-rm-gp104.so"
 fi
 
-# Retain stable vmiop plugin, nvidia-smi, and NVML from .run
-install -m 0755 "$TMP_EXTRACT/pkg/nvidia-smi" "${OPT_DIR}/nvidia-smi"
+# Install R580 vmiop plugin from .run (fallback nvidia-smi/libnvidia-ml if open builds absent)
+if [ ! -f "${OPT_DIR}/nvidia-smi" ]; then
+  install -m 0755 "$TMP_EXTRACT/pkg/nvidia-smi" "${OPT_DIR}/nvidia-smi"
+fi
 install -m 0755 "$TMP_EXTRACT/pkg/libnvidia-vgpu.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgpu.so.${PKG_VER}"
 ln -sf "libnvidia-vgpu.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgpu.so.1"
 ln -sf "libnvidia-vgpu.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-vgpu.so"
-install -m 0755 "$TMP_EXTRACT/pkg/libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so.${PKG_VER}"
-ln -sf "libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so.1"
+if [ ! -f "${OPT_DIR}/lib/libnvidia-ml.so.${PKG_VER}" ]; then
+  install -m 0755 "$TMP_EXTRACT/pkg/libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so.${PKG_VER}"
+  ln -sf "libnvidia-ml.so.${PKG_VER}" "${OPT_DIR}/lib/libnvidia-ml.so.1"
+fi
 
-if [ -f "$TMP_EXTRACT/pkg/vgpuConfig.xml" ]; then
+if [ -f "$TMP_EXTRACT/pkg/vgpuConfig.xml" ] && [ ! -f /usr/share/nvidia/vgpu/vgpuConfig.xml ]; then
   install -m 0644 "$TMP_EXTRACT/pkg/vgpuConfig.xml" /usr/share/nvidia/vgpu/vgpuConfig.xml
+fi
+if [ -f /usr/share/nvidia/vgpu/vgpuConfig.xml ] && [ -f "$REPO_ROOT/tools/patch_r580_vgpu_config_xml.py" ]; then
+  python3 "$REPO_ROOT/tools/patch_r580_vgpu_config_xml.py" --xml /usr/share/nvidia/vgpu/vgpuConfig.xml
 fi
 if [ -f "$TMP_EXTRACT/pkg/nvVgxConfig.xml" ]; then
   install -m 0644 "$TMP_EXTRACT/pkg/nvVgxConfig.xml" /usr/share/nvidia/vgx/nvVgxConfig.xml
 fi
 
-# Clean any leftover R580 libraries that would cause NVRM API mismatches
-rm -f /usr/lib/x86_64-linux-gnu/*580.* 2>/dev/null || true
+# Clean any deprecated R535 libraries/configs that would conflict with R580
+rm -f /usr/lib/x86_64-linux-gnu/*535.* /etc/ld.so.conf.d/nvidia-vgpu-535.conf 2>/dev/null || true
 ln -sf "${OPT_DIR}/nvidia-smi" /usr/bin/nvidia-smi
+ln -sf "${OPT_DIR}/nvidia-vgpud" /usr/bin/nvidia-vgpud
+ln -sf "${OPT_DIR}/nvidia-vgpu-mgr" /usr/bin/nvidia-vgpu-mgr
 ln -sf "${OPT_DIR}/lib/libnvidia-ml.so.${PKG_VER}" /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
-printf '%s\n' "${OPT_DIR}/lib" > /etc/ld.so.conf.d/nvidia-vgpu-535.conf
+printf '%s\n' "${OPT_DIR}/lib" > /etc/ld.so.conf.d/nvidia-vgpu-580.conf
 ldconfig
 
 # 5. Clean kernel modprobe/autoload config (remove stale bare-metal R580 configs)
@@ -278,8 +310,8 @@ Requires=nvidia-vgpud.service
 [Service]
 Type=forking
 Environment=LD_LIBRARY_PATH=${OPT_DIR}/lib
-Environment=OPEN_VGPU_PLUGIN_LIB=${OPT_DIR}/lib/libopen-nvidia-vgpu.so
-Environment=OPEN_VGPU_VENDOR_PLUGIN=${OPT_DIR}/lib/libnvidia-vgpu.so.${PKG_VER}
+# Uses ${OPT_DIR}/lib/libnvidia-vgpu.so -> libnvidia-vgpu.so.${PKG_VER} by default.
+# Optional VRPC hybrid tracing: add OPEN_VGPU_PLUGIN_LIB=libopen-nvidia-vgpu.so and OPEN_VGPU_VENDOR_LIB=${OPT_DIR}/lib/libnvidia-vgpu.so.${PKG_VER}.
 ExecStart=${OPT_DIR}/nvidia-vgpu-mgr
 ExecStopPost=/bin/rm -rf /var/run/nvidia-vgpu-mgr
 

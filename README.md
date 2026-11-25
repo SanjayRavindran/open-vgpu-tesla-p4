@@ -1,12 +1,12 @@
-# `open-vgpu-tesla-p4` — Open-Source Pascal (`GP104` / Tesla P4) KVM vGPU Stack, Wayland/WDDM RDP & Selkies/PixelFlux 10-bit 4:4:4 Toolkit
+# `open-vgpu-tesla-p4` — Open-Source Pascal (`GP104` / Tesla P4) R580 KVM vGPU Stack, Pure Wayland/WDDM RDP & Selkies/PixelFlux 10-bit 4:4:4 Toolkit
 
-A dedicated, **100% open-source** clean-room Rust + Linux kernel vGPU research stack, blob-extraction pipeline, and verified **50/50 2-VM (`GRID P4-4Q`, 4 GiB VRAM each)** R535 + R620 Pure Wayland / Windows 11 WDDM / Selkies + LinuxServer.io PixelFlux (`10-bit` & `4:4:4` `YUV444`) deployment suite for **NVIDIA Pascal (`GP104GL` / Tesla P4, `10de:1bb3`)** on our **UEFI Coreboot host (`192.168.1.24`)**.
+A dedicated, **open-source** clean-room Rust + C + Linux kernel vGPU research stack and streamlined **R580 (`580.196.09-vgpu-kvm` host / `580.196.07` Linux / `582.99` Windows 11)** **50/50 2-VM (`GRID P4-4Q`, 4 GiB VRAM each)** deployment toolkit featuring X11-stripped Pure Wayland GNOME RDP (`--no-x11 --headless`), Windows 11 WDDM `3.1` RDP, and Selkies + LinuxServer.io PixelFlux (`10-bit` & `4:4:4` `YUV444`) via NVIDIA CDI for **NVIDIA Pascal (`GP104GL` / Tesla P4, `10de:1bb3`)** on our **UEFI Coreboot host (`192.168.1.24`)**.
 
 > [!WARNING]
 > **Risk & AI/LLM Notice:** This is experimental systems/kernel software created with extensive assistance from a **Large Language Model (LLM)**. Running out-of-tree kernel modules, patched GPU drivers, or virtualized PCI devices carries risks of kernel panics, BSODs, or data loss. Read [`DISCLAIMER.md`](./DISCLAIMER.md) in full and audit all scripts before use.
 
 > [!NOTE]
-> Bare-metal `580.178.04` hybrid driver work lives in the companion [`open-580-driver`](https://github.com/SanjayRavindran/open-580-driver) repository. The experimental pure `nova-core` / Mesa / Vulkan track and the 3 surplus Linux test VMs have been retired so development focuses strictly on **`open-580-driver`** and **`open-vgpu-tesla-p4`** (Pure Wayland for Linux desktop, WDDM `3.1` for Windows 11, and NVIDIA Container Toolkit for Selkies/PixelFlux `10-bit 4:4:4`). This repository contains **zero proprietary NVIDIA binaries** and **zero passwords**.
+> Bare-metal `580.178.04` hybrid driver work lives in the companion [`open-580-driver`](https://github.com/SanjayRavindran/open-580-driver) repository. All R535/R620 hybrid guest workarounds have been retired in favor of native **R580 (`580.196.09` / `580.196.07` / `582.99`)**. This repository contains **zero proprietary NVIDIA binaries** and **zero passwords**.
 
 ---
 
@@ -14,85 +14,72 @@ A dedicated, **100% open-source** clean-room Rust + Linux kernel vGPU research s
 
 | Component | License | Description |
 | :--- | :--- | :--- |
-| [`nova-vgpu/`](./nova-vgpu/Cargo.toml) | `GPL-2.0` | Standalone safe Rust reimplementation of `nvidia-vgpud` (`open-nvidia-vgpud`), `vgpuConfig.xml` (12 Tesla P4 profiles), `NVA081` packing, `nvidia-vgpu-vfio` `'r'`/`'q'` ioctl ABIs, `vmiop` `VER_5_0` lifecycle, GP104 virtual PCI config, BAR0 `0x8f000` trapping, `"VRPC"` RPC dispatch, `VMMU`, `CHIDMGR`, `FRL`, clean-room guest driver (`guest.rs`), and Falcon blob signature/TOC validator (`falcon_blobs.rs`). |
-| [`open-vgxcfg/`](./open-vgxcfg/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-vgxcfg.so` (`libnvidia-vgxcfg.so.1`) implementing all `9/9` `vgxConfig*` exports (`0` byte difference vs. `libnvidia-vgxcfg.so.535.309.01`). |
+| [`nova-vgpu/`](./nova-vgpu/Cargo.toml) | `GPL-2.0` | Standalone safe Rust reimplementation of `nvidia-vgpud` (`open-nvidia-vgpud`), R580 `NVA081` packing (`0x1540` B), `vgpuConfig.xml` (12 Tesla P4 profiles), `nvidia-vgpu-vfio` `'r'`/`'q'` ioctl ABIs, `vmiop` `VER_5_0` lifecycle, GP104 BAR0 `0x8f000` `"VRPC"`, `VMMU`, `CHIDMGR`, `FRL`, clean-room guest (`guest.rs`), and Falcon signature validator. |
+| [`open-vgxcfg/`](./open-vgxcfg/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-vgxcfg.so` (`libnvidia-vgxcfg.so.1`) implementing all `9/9` `vgxConfig*` exports (`0` byte diff). |
 | [`open-xid-logd/`](./open-xid-logd/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-xid-logd` NVML XID event & 76-char Base64 debugdump daemon. |
-| [`open-vgpu-mgr/`](./open-vgpu-mgr/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-vgpu-mgr` KVM/VFIO `vmiop-env` runtime daemon exporting all `60/60` `vmiop_*` symbols + live `msync`-safe VRPC trace tap. |
-| [`open-nvml-smi/`](./open-nvml-smi/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-smi` CLI & `libopen-nvidia-ml.so` (`libnvidia-ml.so.1`) querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`). |
-| [`open-vgpu-plugin/`](./open-vgpu-plugin/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-nvidia-vgpu.so` (`VER_5_0`/`VER_2_0` `vmiop` mediator plugin) implementing all `47/47` cataloged live VRPC opcodes, guest PFN pinning, BAR1/USERD MMIO forwarding, exact VGX `0x23.0x05` `0x50` (`67,416` B) & `0x9c` (`31,536` B) static-info serializers, and hybrid interposer. |
-| [`open-vgpu-guest/`](./open-vgpu-guest/Makefile) | `MIT` / `GPL-2.0` | Clean-room guest BAR0 `0x8f000` `"VRPC"` client (`open_vgpu_guest_rpc.{h,c}`), `59`-VRPC zero-blob host↔guest loopback test, and `NVIDIA/open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC overlay (`overlay/open_vgpu_bar0_rpc.{h,c}`, `scripts/patch_open_535_guest_rm.py`, `scripts/build_open_535_guest_kmod.sh`). |
-| [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`, `libc.so.6` only) implementing **NVENC `13.0` (`0xd0`)** with `10/10` ELF exports, `43/43` function slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` (`0xc2b7`) + `NVC06F` + `NVC0B5` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `diff-hw-test` hardware parity suite. |
-| [`open-host-rm/`](./open-host-rm/Makefile) | `MIT` | Clean-room C `libopen-host-rm-gp104.so` Tier 2B host GP104 physical RM HAL slice (Category #1 signed Falcon WPR1/ACR LSF header builder for `8/8` Falcons, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, and `22`-profile Tesla P4 vGPU / 50-50 `GRID P4-4Q` `2×2048` CHID partitioner). |
-| [`open-gridd/`](./open-gridd/CMakeLists.txt) | `MIT` | Clean-room C11 + OpenSSL 3.x Linux vGPU / NLS licensing daemon (`open-gridd` -> `/usr/bin/nvidia-gridd`), replacing the `5.31 MiB` proprietary `nvidia-gridd` binary with RSA-2048 `.tok` JWT verification, PKCE auth, AES-256-GCM trusted store, `/dev/nvidiactl` RM license controls, and live FastAPI-DLS leasing verified on `vm-alma`. |
-| [`evidence/vgpu-535-rea610/`](./evidence/vgpu-535-rea610/rea_doctor.json) | Clean-room JSON | Machine-readable `rea@6.10.1` (`Ghidra 12.2`) static analysis, binary layout, native exports, release exposure, and decompilation summaries for `535.309.01` host & guest binaries. |
-| [`kmods/nova_vgpu_mdev/`](./kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) | `GPL-2.0` | Linux `7.0+` host `vfio-mdev` PCI mediator (`vfio_dma_rw`, MSI/INTx `eventfd_signal`, `16 MiB` BAR1 `mmap`). |
-| [`kmods/nova_vgpu_guest/`](./kmods/nova_vgpu_guest/nova_vgpu_guest.c) | `GPL-2.0` | Linux `7.0+` open-source vGPU guest PCI driver (`0x8f000` BAR0/`"VRPC"` shared rings, `GP_IN_RING` `0x80b`, LO-before-HI teardown) + [`test_guest_ioctl.c`](./kmods/nova_vgpu_guest/test_guest_ioctl.c). |
-| [`scripts/extract_proprietary_blobs.sh`](./scripts/extract_proprietary_blobs.sh) | `GPL-2.0` | SHA-256-verified extractor for Host `535.309.01` GP104 Falcon blobs, Linux Guest `535.309.01`, R620 (`620.70.06`) Wayland EGL/GBM overlay (`wayland620.tgz`), and Windows Guest `539.72` WHQL. |
-| [`scripts/patch_535_guest_linux7.py`](./scripts/patch_535_guest_linux7.py) | `GPL-2.0` | Linux `7.x+` kernel compatibility patcher (`strncpy` + `drm_atomic_commit`) for `535.309.01-grid` Linux guests. |
-| [`scripts/patch_grd_ptx_535.sh`](./scripts/patch_grd_ptx_535.sh) | `GPL-2.0` | Downgrades GNOME Remote Desktop's `grd-cuda-avc-utils_30.ptx` header (`.version 8.7 -> 8.0`) for `535`'s CUDA `12.1`/`12.2` PTX `8.2` limit. |
-| [`scripts/setup_selkies_pixelflux_vgpu.sh`](./scripts/setup_selkies_pixelflux_vgpu.sh) | `GPL-2.0` | Configures Docker + NVIDIA Container Toolkit (`nvidia-ctk` CDI v0.7.0) inside a `535.309.01` + R620 Wayland/GBM vGPU guest for Selkies/PixelFlux `10-bit 4:4:4` hardware acceleration. |
-| [`scripts/start_vgpu_vms.sh`](./scripts/start_vgpu_vms.sh) | `GPL-2.0` | 2-VM 50/50 CPU (`4 vCPU` each) & 50/50 GPU (`2× GRID P4-4Q` / `nvidia-65`, `4096 MiB` VRAM each) launcher for AlmaLinux 10.3 (`192.168.1.68`) and Windows 11 24H2 (`192.168.1.65`). |
+| [`open-vgpu-mgr/`](./open-vgpu-mgr/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-vgpu-mgr` KVM/VFIO `vmiop-env` runtime daemon (`60/60` `vmiop_*` symbols, R580 `0x98`-byte `SET_VM_NAME` with `vmIdType = 1U`, `0x1538`-byte `GET_VGPU_TYPE_INFO`, `0x28`-byte `CREATE_DEVICE`, `msync`-safe VRPC tap). |
+| [`open-nvml-smi/`](./open-nvml-smi/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `open-nvidia-smi` CLI & `libopen-nvidia-ml.so` (`libnvidia-ml.so.1`) querying `/dev/nvidiactl` & `/dev/nvidiaN` R580 RM controls (`0x2080*`, `0xa081*`). |
+| [`open-vgpu-plugin/`](./open-vgpu-plugin/Makefile) | `MIT` / `GPL-2.0` | Clean-room C `libopen-nvidia-vgpu.so` (`VER_5_0`/`VER_2_0` `vmiop` mediator plugin): `47/47` VRPC opcodes, guest PFN pinning, BAR1/USERD MMIO forwarding, `0x50`/`0x9c` static-info serializers, and hybrid interposer (defaulting to `/opt/nvidia-vgpu-580/lib/libnvidia-vgpu.so.580.196.09`). |
+| [`open-vgpu-guest/`](./open-vgpu-guest/Makefile) | `MIT` / `GPL-2.0` | Clean-room guest BAR0 `0x8f000` `"VRPC"` client (`open_vgpu_guest_rpc.{h,c}`), `59`-VRPC zero-blob host↔guest loopback test, and open guest kernel RM BAR0 VRPC overlay research. |
+| [`open-nvenc/`](./open-nvenc/Makefile) | `MIT` | Clean-room C `libopen-nvidia-encode.so` (`libnvidia-encode.so.1`, `libc.so.6` only) implementing **NVENC `13.0` (`0xd0`)** with `10/10` exports, `43/43` function slots, `45/45` `NvTool` APIs, GP104 `NVC2B7` (`0xc2b7`) + `NVC06F` + `NVC0B5` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 (`YUV444_10BIT`), and `diff-hw-test`. |
+| [`open-host-rm/`](./open-host-rm/Makefile) | `MIT` | Clean-room C `libopen-host-rm-gp104.so` Tier 2B host GP104 physical RM HAL slice (Category #1 signed Falcon WPR1/ACR LSF header builder for `8/8` Falcons, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, and 50-50 `GRID P4-4Q` CHID partitioner). |
+| [`open-gridd/`](./open-gridd/CMakeLists.txt) | `MIT` | Clean-room C11 + OpenSSL 3.x Linux NLS/DLS licensing daemon (`open-gridd`, GCC 14 clean-compile). |
+| [`tools/`](./tools/) | `GPL-2.0` / `MIT` | R580 host XML injector/normalizer (`patch_r580_vgpu_config_xml.py` for `0x1BB3`/`SUBSYS_11D8`), R580 Linux guest `nv-pci.c` open-C allowlist patcher (`patch_r580_guest_nv_pci.py` for `10de:1bb3`), ELF64 `.rodata` bindata parser, and Falcon extractor (`extract_vgpu_535_blobs.py`). |
+| [`scripts/`](./scripts/) | `GPL-2.0` | Streamlined R580 host (`install_vgpu_host_dkms.sh`, `install_proxmox_vgpu_host.sh`, `install_open_vgpu.sh`, `install_fastapi_dls.sh`) & guest (`provision_linux_vgpu_guest.sh` with `--grid-580-run` + `--strip-x11` + `--gridd-patcher`, `provision_win11_guest.ps1` with `-PatchedNvxdapixPath`, `setup_selkies_pixelflux_vgpu.sh` CDI mode) automation. |
+| [`evidence/vgpu-535-rea610/`](./evidence/vgpu-535-rea610/rea_doctor.json) | Clean-room JSON | Baseline `rea@6.10.1` (`Ghidra 12.2`) static analysis, binary layouts, native exports, and decompilation summaries. |
+| [`kmods/nova_vgpu_mdev/`](./kmods/nova_vgpu_mdev/nova_vgpu_mdev.c) & [`kmods/nova_vgpu_guest/`](./kmods/nova_vgpu_guest/nova_vgpu_guest.c) | `GPL-2.0` | Linux `7.0+` host `vfio-mdev` mediator (`vfio_dma_rw`, MSI/INTx, BAR1 `mmap`) & guest `0x8f000` `"VRPC"` PCI driver + [`test_guest_ioctl.c`](./kmods/nova_vgpu_guest/test_guest_ioctl.c). |
 | [`docker-compose.yml`](./docker-compose.yml) | `GPL-2.0` | Selkies + LinuxServer.io PixelFlux container stack configured for **`10-bit` & `4:4:4` (`YUV444`) NVENC hardware acceleration** (`SELKIES_ENCODER=h265enc,h264enc`, `SELKIES_VIDEO_FULLCOLOR=true`, `SELKIES_VIDEO_10BIT=true`). |
-| [`rdp/`](./rdp/README.md) | `GPL-2.0` | Ready-to-use `.rdp` client profiles (`mstsc.exe`) for the 2 active 50/50 VMs (`vm-win11.rdp` & `vm-alma.rdp`) with LAN H.264/AVC444 settings and zero embedded passwords. |
-| [`tests/`](./tests/) | `GPL-2.0` | Python unit/hygiene tests + live Linux Wayland & Windows 11 GPU/NVENC/NVDEC/RDP verification harnesses. |
-| [`tools/`](./tools/extract_vgpu_535_blobs.py) | `GPL-2.0` / `MIT` | Clean-room ELF64 `.rodata` bindata parser, Falcon descriptor decoder, and `BLOB_MANIFEST.json`-verified extractor. |
-| [`firmware-blobs/gp104-vgpu-535/`](./firmware-blobs/gp104-vgpu-535/README.md) | Clean-room manifest | Metadata manifest (`BLOB_MANIFEST.json`) only; proprietary `.bin` blobs are extracted locally by the user. |
-| [`docs/`](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md) | `GPL-2.0` | Complete reverse-engineering reports, UEFI Coreboot host setup, limitations vs. R620, RDP feature matrix, and 2-VM 50/50 + Selkies `10-bit 4:4:4` test results. |
+| [`rdp/`](./rdp/README.md) | `GPL-2.0` | Ready-to-use `.rdp` client profiles (`vm-win11.rdp` & `vm-alma.rdp`) with zero embedded passwords. |
+| [`tests/`](./tests/) | `GPL-2.0` | Python unit/hygiene tests + live Linux Wayland (`X11_RUNNING=0`) & Windows 11 R580 verification harnesses. |
+| [`docs/`](./docs/06-R580-LIMITATIONS-AND-VERIFICATION-REPORT.md) | `GPL-2.0` | Complete reverse-engineering reports, streamlined R580 host/guest deployment docs, RDP matrix, and live verification reports. |
 
 ---
 
-## Active 2-VM 50/50 Architecture on UEFI Coreboot Host (`192.168.1.24`)
+## Active 2-VM 50/50 R580 Architecture on UEFI Coreboot Host (`192.168.1.24`)
 
 | Machine | LAN IP | CPU / RAM / vGPU Profile | Desktop & Hardware Acceleration Verified |
 | :--- | :--- | :--- | :--- |
-| **Host (`h61`)** | `192.168.1.24` (`br0`) | Intel Xeon E3-1275 V2 (`4C/8T`), `14 GiB` RAM, Gigabyte `H61M-S1 PLUS` with **UEFI Coreboot (`df45ea2c49b4-dirty`)** + Intel VT-d (`DMAR`) | Ubuntu 26.04 LTS (`7.0.0-43-generic`), `535.309.01-vgpu-kvm`, persistent `br0`, `vgpu-vms.service` auto-starting both `GRID P4-4Q` VMs (`8032 / 8192 MiB` allocated) |
-| **`vm-win11`** | `192.168.1.65:3389` | `4 vCPU` (50%), `6 GiB` RAM, **`GRID P4-4Q` (`4096 MiB` VRAM, 50% GPU)** | Windows 11 24H2 Pro, WHQL **`539.72` (`WDDM 3.1`)** bound to `SUBSYS_120610DE`, `Microsoft Basic Display Adapter` disabled, **TechPowerUp GPU-Z 2.71.0** (`4096 MB GDDR5`, DirectX 12 `12_1`, OpenGL `4.6`, Vulkan, CUDA, OpenCL, DirectCompute, DirectML), **NVIDIA Control Panel (`8.1.969.0`)**, and hardware `AVC444` RDP (`NVIDIA H.264 Encoder MFT`) |
-| **`vm-alma`** | `192.168.1.68:3389`<br>`https://192.168.1.68:3001` | `4 vCPU` (50%), `5 GiB` RAM, **`GRID P4-4Q` (`4096 MiB` VRAM, 50% GPU)** | AlmaLinux 10.3 (`6.12.0-264.16.1.el10_3.x86_64_v2`), **Pure Wayland GNOME `49.5` (`--no-x11`, zero host X11/Xwayland)** with R620 EGL/GBM overlay + hardware `AVC444` RDP, PLUS **Docker `29.10.0` + NVIDIA Container Toolkit `1.20.2` + Selkies `2.2.1` + LinuxServer.io PixelFlux `2.2.3`** streaming zero-copy **`NVENC H265 4:4:4 10-bit` (`444-10`)** and **`NVENC H264 4:4:4 8-bit` (`444-8`)** |
+| **Host (`h61`)** | `192.168.1.24` (`br0`) | Intel Xeon E3-1275 V2 (`4C/8T`), `14 GiB` RAM, **UEFI Coreboot (`df45ea2c49b4-dirty`)** + VT-d (`DMAR`) | Ubuntu 26.04 LTS (`7.0.0-44-generic`), **`580.196.09-vgpu-kvm`** (`0xc85b7` bypass + `vgpuConfig.xml` `0x11D8` + `/opt/nvidia-vgpu-580/` open daemons), `fastapi-dls:latest` (`2.0.3`) on `:443`, `GRID P4-4Q` (`nvidia-65`) |
+| **`vm-win11`** | `192.168.1.74:3389` (DHCP) / `.65` | `4 vCPU` (50%), `6144 MiB` RAM, **`GRID P4-4Q` (`4096 MiB` VRAM, 50% GPU)** | Windows 11 24H2 Pro, WHQL **`582.99` (`WDDM 3.1`, CUDA `13.0`)** bound natively to `SUBSYS_11D810DE`, `nvxdapix.dll` (`9594600` B) patched via `gridd-unlock-patcher` (**`Licensed`**), hardware `AVC444` RDP (`NVIDIA H.264 Encoder MFT`) |
+| **`vm-alma`** | `192.168.1.68:3389`<br>`https://192.168.1.68:3001` | `4 vCPU` (50%), `5120 MiB` RAM, **`GRID P4-4Q` (`4096 MiB` VRAM, 50% GPU)** | AlmaLinux 10.3 (`6.12.0-264.16.1.el10_3.x86_64_v2`), **`580.196.07-grid`** (`nv-pci.c` `10de:1bb3` 2-line open-C patch, `-m=kernel`, **CUDA `13.0`**, **NVENC `13.0`**), X11-stripped **Pure Wayland GNOME `49.5` (`--no-x11 --headless`)**, **`Licensed`** via `gridd-unlock-patcher`, + **Docker + NVIDIA CDI (`mode = "cdi"`) + Selkies PixelFlux (`NVENC H265 4:4:4 10-bit` / `H264 4:4:4 8-bit`)** |
 
 ---
 
-## How to Extract Proprietary Binary Blobs from NVIDIA Drivers
+## Streamlined R580 Quick-Start (Host & Guests)
 
-### Step 1 — Obtain Official NVIDIA GRID Installers
-- **Host vGPU KVM (`535.309.01`):** `NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run`
-- **Linux Guest (`535.309.01` — CUDA `12.1`/`12.2`, NVENC `12.1`):** `NVIDIA-Linux-x86_64-535.309.01-grid.run`
-- **Linux Guest R620 (`620.70.06` — Wayland EGL/GBM overlay only):** `NVIDIA-Linux-x86_64-620.70.06-grid.run`
-- **Windows Guest (`539.72` WHQL — optional, requires `7z`):** `539.72_grid_win10_win11_server2019_server2022_dch_64bit_international.exe`
-
-### Step 2 — Run the SHA-256-Verified Extraction Script
+### 1. Host Installation (`580.196.09-vgpu-kvm`, Ubuntu KVM or Proxmox VE 8/9)
 ```bash
-./scripts/extract_proprietary_blobs.sh \
-  --host-run      /path/to/NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run \
-  --guest-535-run /path/to/NVIDIA-Linux-x86_64-535.309.01-grid.run \
-  --guest-620-run /path/to/NVIDIA-Linux-x86_64-620.70.06-grid.run \
-  --win-539-exe   /path/to/539.72_grid_win10_win11_server2019_server2022_dch_64bit_international.exe
+sudo bash scripts/install_open_vgpu.sh \
+  --role host \
+  --run-file /path/to/NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run \
+  --with-dls docker \
+  --dls-url 192.168.1.24
+```
+*(Automatically applies `0xc85b7` bypass, runs `tools/patch_r580_vgpu_config_xml.py` for `0x11D8` Tesla P4 profiles, installs `/opt/nvidia-vgpu-580/` open daemons + `libnvidia-vgpu.so -> libnvidia-vgpu.so.580.196.09`, and launches FastAPI-DLS `:443`.)*
+
+### 2. Linux Guest Installation (`580.196.07-grid`, Pure Wayland + X11 Strip + CDI)
+```bash
+sudo bash scripts/provision_linux_vgpu_guest.sh \
+  --dls-url https://192.168.1.24 \
+  --grid-580-run /path/to/NVIDIA-Linux-x86_64-580.196.07-grid.run \
+  --gridd-patcher /path/to/gridd-unlock-patcher \
+  --rdp-user zero \
+  --rdp-pass '<YOUR_RDP_PASSWORD>' \
+  --with-selkies
+```
+*(Automatically patches `kernel/nvidia/nv-pci.c` for `10de:1bb3`, installs `-m=kernel`, strips NVIDIA X11 artifacts while keeping `10_nvidia_wayland.json` + `15_nvidia_gbm.json`, patches `nvidia-gridd`, fetches DLS token, sets `GSK_RENDERER=ngl`, configures `--no-x11 --headless` `:3389` RDP, and configures Docker CDI `mode = "cdi"`.)*
+
+### 3. Windows 11 24H2 Guest Installation (`582.99` WHQL + `nvxdapix.dll` Patch)
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\provision_win11_guest.ps1 `
+  -DlsUrl https://192.168.1.24 `
+  -DriverInstallerPath C:\path\to\582.99_grid_win10_win11_server2022_server_2025_dch_64bit_international.exe `
+  -PatchedNvxdapixPath C:\path\to\nvxdapix_patched.dll
 ```
 
-### Step 3 — Enable Pure Wayland GNOME Hardware RDP (`AVC444`) & Selkies/PixelFlux (`10-bit 4:4:4`) on Linux Guest
-```bash
-sudo ./scripts/patch_grd_ptx_535.sh
-sudo ./scripts/setup_selkies_pixelflux_vgpu.sh
-docker compose up -d
-```
-
 ---
 
-## Known Limitations (Summary)
-
-Full side-by-side R620 comparison and root causes are in [`docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md`](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md):
-
-- **CUDA `12.1` / `12.2` & PTX `≤8.2` ceiling:** No CUDA `12.3`–`13.5` (R620) support; build or target CUDA `12.1`/`12.2`.
-- **NVENC API `12.1` Solved (`open-nvenc` `13.0`):** Vendor `535.309.01` caps at NVENC `12.1`; installing clean-room [`open-nvenc/`](./open-nvenc/Makefile) upgrades Linux vGPU guests to **NVENC `13.0` (`0xd0`)** for `FFmpeg 8.x` and `Selkies` PixelFlux (`H.265 10-bit 4:4:4`, `H.264 4:2:0`/`4:4:4`, including non-16-aligned `1784x992`).
-- **Vulkan `1.3.242` ceiling:** No Vulkan `1.4.x` (`1.4.357` in R620).
-- **No R620 `nvidia-drm` `fbdev=1` or DRM syncobj timeline ioctls:** `535.309.01` `nvidia-drm` only supports `modeset=1`.
-- **Windows 11 `539.72` stays on `WDDM 3.1`:** No vGPU HAGS (`AlwaysOff`), no MCDM (compute-only driver model replacing TCC on newer GPUs; WDDM remains Microsoft's active display model), and no WSL2 GPU inside KVM. When changing vGPU profiles (e.g. `1Q -> 4Q`), run `pnputil /add-driver ... /install` once for the new Subsystem ID (`SUBSYS_120610DE`) and keep `Microsoft Basic Display Adapter` disabled.
-- **Homogeneous vGPU profiles only & no Console VNC over Wayland:** Concurrent VMs on Pascal must share one profile size (e.g., `2× GRID P4-4Q`), and Wayland desktops are accessed via RDP (`display=off`).
-- **Pascal GP104 silicon limits:** No SR-IOV, MIG, DLSS 2+, or hardware AV1 encode/decode.
-- **Unlicensed vGPU timer:** Without an NVIDIA DLS/CLS license server, unlicensed vGPU transitions to restricted throttling after ~20 minutes.
-
----
-
-## Automated Tests & Live Verification
+## Automated Tests & Verification
 
 ```bash
 # Rust open-nvidia-vgpud + RM ioctl unit tests
@@ -109,52 +96,23 @@ make -C open-nvenc clean all test diff-test hw-test diff-hw-test
 make -C open-host-rm clean all test
 make -C open-gridd clean all test
 
-# Repository hygiene, patcher idempotency, REA evidence & script dry-run tests
+# Repository hygiene, R580 patcher idempotency, REA evidence & script dry-run tests
 python3 -m unittest discover -s tests -v
 ```
 
 ## Documentation
-- [01 — Pascal vGPU `535.309.01` Static Analysis & Rust Reimplementation](./docs/01-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md)
+- [01 — Pascal vGPU Static Analysis & Rust Reimplementation (`nova-vgpu`)](./docs/01-PASCAL-VGPU-535-ANALYSIS-AND-RUST.md)
 - [02 — Guest vGPU Driver Analysis & Open-Source Kernel Mediator](./docs/02-GUEST-VGPU-DRIVER-ANALYSIS-AND-OPENSOURCE.md)
 - [03 — Why R620 (`620.70.06`) Dropped Pascal Kernel Support](./docs/03-GRID-620-PASCAL-SUPPORT-CHECK.md)
-- [04 — 2-VM 50/50 (`GRID P4-4Q`) Pure Wayland, Windows 11 WDDM & Selkies 10-bit 4:4:4 Guide](./docs/04-R620-WAYLAND-ON-R535-MULTI-VM-RDP.md)
-- [06 — Limitations, R620 vs. R535 Hybrid Comparison, RDP Feature Matrix & Live Verification Report](./docs/06-LIMITATIONS-R620-VS-R535-AND-VERIFICATION-REPORT.md)
+- [04 — 2-VM 50/50 (`GRID P4-4Q`) R580 Pure Wayland, Windows 11 (`582.99`) & Selkies Guide](./docs/04-R580-MULTI-VM-WAYLAND-WDDM-RDP.md)
+- [06 — R580 Limitations, Feature Matrix & Live Verification Report](./docs/06-R580-LIMITATIONS-AND-VERIFICATION-REPORT.md)
 - [07 — Reproducible Ubuntu KVM & Proxmox VE 8/9 Deployment Guide](./docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md)
 - [08 — Clean-Room Open-Source Host & Guest Daemons (`rea@6.10.1`)](./docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md)
 - [09 — Open-Source vs. Closed-Source vGPU Software Architecture Diagrams](./docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md)
 - [10 — Open-Source Roadmap, Remaining Blob Matrix & Effort Estimate](./docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md)
-- [11 — Unified Host & Guest Installation Guide](./docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md)
+- [11 — Unified R580 Host & Guest Installation Guide](./docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md)
 - [12 — Open `vmiop` Plugin (`libopen-nvidia-vgpu.so`) & 47-Opcode Live VRPC Catalog](./docs/12-OPEN-VGPU-PLUGIN-AND-VRPC-TRACE-CATALOG.md)
-- [13 — Clean-Room Open Guest vGPU Kernel Driver (`open-gpu-kernel-modules@535.309.01` GP104 BAR0 VRPC Overlay)](./docs/13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md)
+- [13 — Clean-Room Open Guest vGPU Kernel Driver Research](./docs/13-OPEN-GUEST-VGPU-KERNEL-DRIVER.md)
 - [14 — Standalone Open NVENC `13.0` (`0xd0`) / `NVC2B7` (`0xc2b7`) GP104 Protocol](./docs/14-STANDALONE-NVENC-13-GP104-PHASE0-PROTOCOL.md)
 - [15 — Standalone Open NVENC `13.0` Usage, Installation & Parity Guide](./docs/15-STANDALONE-NVENC-13-GP104-USAGE.md)
 - [Disclaimer, Risk Notice & AI/LLM Usage Disclosure](./DISCLAIMER.md)
-
----
-
-## Reproducible Ubuntu KVM & Proxmox VE Deployment + Open Host/Guest Stack (`rea@6.10.1`)
-
-All non-DRM host control/runtime/telemetry daemons, the `vmiop` mediator plugin, the guest BAR0 `"VRPC"` kernel driver overlay, the standalone guest NVENC `13.0` userspace encoder (`open-nvenc`), the Linux NLS/DLS licensing daemon (`open-gridd`), and the GP104 physical host RM HAL slice have been reverse-engineered with **`rea@6.10.1`** (`evidence/vgpu-535-rea610/`) and implemented as clean-room open-source components:
-- **Clean-Room Open-Source Host & Guest Components**:
-  - `nova-vgpu` (`open-nvidia-vgpud`): pure-Rust `/dev/nvidiactl` RM ioctl registrar (`NVA081` `0xa0810101` + `0xa0810109`).
-  - `open-vgxcfg` (`libopen-vgxcfg.so`): zero-dependency C library implementing all `9/9` `vgxConfig*` exports (`0` byte differences against `libnvidia-vgxcfg.so.535.309.01`).
-  - `open-xid-logd` (`open-nvidia-xid-logd`): clean-room C NVML XID daemon (`mock-NVML` + 76-char Base64 debugdump tested).
-  - `open-vgpu-mgr` (`open-nvidia-vgpu-mgr`): clean-room C KVM/VFIO `vmiop-env` runtime daemon exporting all `60/60` `vmiop_*` symbols (`0` symbol diff against `nvidia-vgpu-mgr`).
-  - `open-nvml-smi` (`open-nvidia-smi` + `libopen-nvidia-ml.so`): clean-room C NVML (`libnvidia-ml.so.1`) and `nvidia-smi` CLI querying `/dev/nvidiactl` & `/dev/nvidiaN` RM controls (`0x2080*`, `0xa081*`) for GP104 telemetry and active vGPU instances.
-  - `open-vgpu-plugin` (`libopen-nvidia-vgpu.so`): clean-room C `vmiop` mediator plugin (`VER_5_0`/`VER_2_0`, `47/47` live VRPC opcodes, PFN pinning, BAR1/USERD MMIO forwarding, exact `0x50` `67,416` B & `0x9c` `31,536` B binary serializers).
-  - `open-vgpu-guest` + `kmods/nova_vgpu_guest`: clean-room guest BAR0 `0x8f000` `"VRPC"` client (`59`-VRPC zero-blob host↔guest loopback), `nova_vgpu_guest.ko`, and `NVIDIA/open-gpu-kernel-modules@535.309.01` zero-blob guest `nvidia*.ko` (`Dual MIT/GPL`, `taint: OE`) overlay.
-  - `open-nvenc` (`libopen-nvidia-encode.so` / `libnvidia-encode.so.1`): standalone clean-room **NVENC `13.0` (`0xd0`)** userspace library (`libc.so.6` only, `10/10` exports, `43/43` slots, `45/45` `NvTool` names, direct GP104 `NVC2B7` `0xc2b7` + `NVC06F` + `NVC0B5` H.264/HEVC 8/10-bit 4:2:0 & 4:4:4 + cached BL16 swizzle; `diff-hw-test` and live `brave-origin` verified).
-  - `open-host-rm` (`libopen-host-rm-gp104.so`): clean-room Tier 2B host GP104 physical RM HAL slice (`8/8` Category #1 signed Falcon WPR1/ACR LSF headers, `NV_PMC_ENABLE`/BAR1/BAR2 physical bringup, `22` vGPU types, 50/50 `GRID P4-4Q` split).
-  - `open-gridd` (`nvidia-gridd`, C11 + OpenSSL 3.x): clean-room Linux NLS/DLS licensing daemon replacing vendor `nvidia-gridd` (`112 KiB` vs. `5.31 MiB`), live-verified via `systemd` against FastAPI-DLS (`https://192.168.1.24:443`) on AlmaLinux 10.3 `GRID P4-4Q` (`License Status : Licensed`).
-  - See [docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md](docs/08-OPEN-SOURCE-HOST-DAEMONS-REA-610.md), [docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md](docs/09-OPEN-VS-CLOSED-ARCHITECTURE-DIAGRAMS.md), and [docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md](docs/10-OPEN-SOURCE-ROADMAP-AND-EFFORT-ESTIMATE.md).
-- **Unified Host & Guest Installation Scripts**:
-  - `scripts/install_proxmox_vgpu_host.sh`: dedicated one-shot Proxmox VE 8/9 host configurator (optional `pve-no-subscription` repo, `proxmox-headers-$(uname -r)`, GRUB & `proxmox-boot-tool` IOMMU setup, VFIO/mdev/`nouveau` blacklist + `update-initramfs`, DKMS `535.309.01` + all 8 clean-room open-source host artifacts, native systemd FastAPI-DLS, and optional `--setup-vms fresh|import-qcow2`).
-  - `scripts/provision_linux_vgpu_guest.sh`: universal multi-distro Linux vGPU guest provisioner supporting **RHEL (8/9/10)**, **AlmaLinux OS (8/9/10)**, **Rocky Linux / Oracle Linux / CentOS Stream / Fedora**, **Ubuntu LTS (20.04, 22.04, 24.04, 26.04 LTS)**, and **Debian (11, 12, 13)**.
-  - `scripts/install_open_nvenc.sh`: builds, differential-tests, and deploys `libopen-nvidia-encode.so` (`NVENC 13.0`) on Linux guests or bare-metal hosts (with optional `--restore` rollback).
-  - `scripts/install_open_vgpu.sh`: unified `--role host|guest-linux|guest-windows` installer for the 50/50 vGPU stack.
-  - `scripts/install_open_580.sh`: unified `--role host|guest-linux` installer for the bare-metal / PCIe-passthrough `open-580-driver` stack.
-  - `scripts/install_vgpu_host_dkms.sh`: clean DKMS `nvidia-vgpu-kvm/535.309.01` + all clean-room open host binaries installer for Ubuntu KVM & Proxmox VE 8/9.
-  - `scripts/install_fastapi_dls.sh`: FastAPI-DLS v2 (`docker` or native `systemd`).
-  - `scripts/setup_proxmox_vgpu_vms.sh`: Proxmox VE `fresh` & `import-qcow2` VM provisioning (`vm-alma` + `vm-win11`).
-  - `scripts/provision_alma_guest.sh`, `scripts/provision_win11_guest.ps1`, and `scripts/templates/win11-autounattend.xml`.
-  - See [docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md](docs/07-UBUNTU-AND-PROXMOX-REPRODUCIBLE-DEPLOYMENT.md) and [docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md](docs/11-INSTALLATION-GUIDE-HOST-AND-GUEST.md).

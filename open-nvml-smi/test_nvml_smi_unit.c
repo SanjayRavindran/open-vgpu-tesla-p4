@@ -186,33 +186,33 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                 }
                 return 0;
             case 0xa0810104U: /* GET_SUPPORTED_VGPU_TYPES */
-                u32[1] = 2U;
-                u32[2] = 0x3fU; /* GRID P4-1Q */
-                u32[3] = 0x41U; /* GRID P4-4Q */
+                u32[2] = 2U;
+                u32[3] = 0x3fU; /* GRID P4-1Q */
+                u32[4] = 0x41U; /* GRID P4-4Q */
                 return 0;
             case 0xa0810105U: /* GET_CREATABLE_VGPU_TYPES */
-                u32[1] = 1U;
-                u32[2] = 0x41U;
+                u32[2] = 1U;
+                u32[3] = 0x41U;
                 return 0;
             case 0xa0810103U: /* GET_VGPU_TYPE_INFO */
                 if (u32[0] == 0x41U) {
-                    snprintf((char *)&p[0x0c], 32, "GRID P4-4Q");
-                    snprintf((char *)&p[0x2c], 32, "Quadro");
-                    *(uint32_t *)&p[0x14c] = 2U;
-                    *(uint32_t *)&p[0x150] = 4U;
-                    *(uint32_t *)&p[0x154] = 7680U;
-                    *(uint32_t *)&p[0x158] = 4320U;
-                    *(uint32_t *)&p[0x160] = 60U;
-                    *(uint64_t *)&p[0x188] = 4294967296ULL;
+                    snprintf((char *)&p[0x0c], 64, "GRID P4-4Q");
+                    snprintf((char *)&p[0x4c], 64, "Quadro");
+                    *(uint32_t *)&p[0x18c] = 2U;
+                    *(uint32_t *)&p[0x190] = 4U;
+                    *(uint32_t *)&p[0x194] = 7680U;
+                    *(uint32_t *)&p[0x198] = 4320U;
+                    *(uint32_t *)&p[0x1a0] = 60U;
+                    *(uint64_t *)&p[0x1c8] = 4294967296ULL;
                 } else {
-                    snprintf((char *)&p[0x0c], 32, "GRID P4-1Q");
-                    snprintf((char *)&p[0x2c], 32, "Quadro");
-                    *(uint32_t *)&p[0x14c] = 8U;
-                    *(uint32_t *)&p[0x150] = 4U;
-                    *(uint32_t *)&p[0x154] = 5120U;
-                    *(uint32_t *)&p[0x158] = 2880U;
-                    *(uint32_t *)&p[0x160] = 60U;
-                    *(uint64_t *)&p[0x188] = 1073741824ULL;
+                    snprintf((char *)&p[0x0c], 64, "GRID P4-1Q");
+                    snprintf((char *)&p[0x4c], 64, "Quadro");
+                    *(uint32_t *)&p[0x18c] = 8U;
+                    *(uint32_t *)&p[0x190] = 4U;
+                    *(uint32_t *)&p[0x194] = 5120U;
+                    *(uint32_t *)&p[0x198] = 2880U;
+                    *(uint32_t *)&p[0x1a0] = 60U;
+                    *(uint64_t *)&p[0x1c8] = 1073741824ULL;
                 }
                 return 0;
             case 0xa0810102U: /* GET_VGPU_INSTANCES */
@@ -230,7 +230,7 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                     *(uint32_t *)&e[0x48] = 1U;
                     snprintf((char *)&e[0x78], 128, (i == 0) ? "vm-alma" : "vm-win11");
                     *(uint32_t *)&e[0x100] = 0x41U;
-                    snprintf((char *)&e[0x110], 16, (i == 0) ? "535.309.01" : "539.72");
+                    snprintf((char *)&e[0x110], 16, (i == 0) ? "580.196.07" : "582.99");
                     snprintf((char *)&e[0x120], 16, (i == 0) ? "mdev-uuid-1" : "mdev-uuid-2");
                     *(uint64_t *)&e[0x138] = 4000ULL * 1024ULL * 1024ULL;
                 }
@@ -243,14 +243,14 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
 }
 
 static void test_nvml_core_telemetry(void) {
-    open_nvml_set_test_hooks(mock_rm_ioctl, "535.309.01");
+    open_nvml_set_test_hooks(mock_rm_ioctl, "580.196.09");
     assert(nvmlInit_v2() == NVML_SUCCESS);
 
     char drv[80] = {0}, nvmlv[80] = {0};
     assert(nvmlSystemGetDriverVersion(drv, sizeof(drv)) == NVML_SUCCESS);
-    assert(strcmp(drv, "535.309.01") == 0);
+    assert(strcmp(drv, "580.196.09") == 0);
     assert(nvmlSystemGetNVMLVersion(nvmlv, sizeof(nvmlv)) == NVML_SUCCESS);
-    assert(strcmp(nvmlv, "12.535.309.01") == 0);
+    assert(strcmp(nvmlv, "12.580.196.09") == 0);
 
     unsigned int cnt = 0;
     assert(nvmlDeviceGetCount_v2(&cnt) == NVML_SUCCESS);
@@ -319,7 +319,7 @@ static void test_nvml_core_telemetry(void) {
 }
 
 static void test_nvml_vgpu_and_processes(void) {
-    open_nvml_set_test_hooks(mock_rm_ioctl, "535.309.01");
+    open_nvml_set_test_hooks(mock_rm_ioctl, "580.196.09");
     assert(nvmlInit_v2() == NVML_SUCCESS);
     nvmlDevice_t dev = NULL;
     assert(nvmlDeviceGetHandleByIndex_v2(0, &dev) == NVML_SUCCESS);
@@ -348,8 +348,8 @@ static void test_nvml_vgpu_and_processes(void) {
     nvmlVgpuTypeId_t vtid = 0;
     assert(nvmlVgpuInstanceGetType(88904U, &vtid) == NVML_SUCCESS && vtid == 0x41U);
     assert(nvmlVgpuInstanceGetVmID(88904U, vmid, sizeof(vmid), &idt) == NVML_SUCCESS && strcmp(vmid, "vm-alma") == 0);
-    assert(nvmlVgpuInstanceGetVmDriverVersion(88904U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "535.309.01") == 0);
-    assert(nvmlVgpuInstanceGetVmDriverVersion(88970U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "539.72") == 0);
+    assert(nvmlVgpuInstanceGetVmDriverVersion(88904U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "580.196.07") == 0);
+    assert(nvmlVgpuInstanceGetVmDriverVersion(88970U, gdrv, sizeof(gdrv)) == NVML_SUCCESS && strcmp(gdrv, "582.99") == 0);
     assert(nvmlVgpuInstanceGetLicenseStatus(88904U, &lic) == NVML_SUCCESS && lic == 1U);
     assert(nvmlVgpuInstanceGetFbUsage(88904U, &fbu) == NVML_SUCCESS && fbu == 4000ULL * 1024ULL * 1024ULL);
 

@@ -445,7 +445,7 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("open-nvidia-smi (NVIDIA-SMI 535.309.01 clean-room replacement)\n");
+            printf("open-nvidia-smi (NVIDIA-SMI 580.196.09 clean-room replacement)\n");
             printf("Usage: nvidia-smi [options] | nvidia-smi vgpu [-s|-c|-q]\n");
             printf("  -L, --list-gpus            List attached GPUs and UUIDs\n");
             printf("  -q, --query                Display detailed GPU / vGPU telemetry log\n");
@@ -455,8 +455,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
-            printf("NVIDIA-SMI version  : 535.309.01 (open-nvidia-smi)\n");
-            printf("NVML version        : 12.535.309.01 (libopen-nvidia-ml.so)\n");
+            printf("NVIDIA-SMI version  : 580.196.09 (open-nvidia-smi)\n");
+            printf("NVML version        : 12.580.196.09 (libopen-nvidia-ml.so)\n");
             return 0;
         }
         if (strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "--list-gpus") == 0) {

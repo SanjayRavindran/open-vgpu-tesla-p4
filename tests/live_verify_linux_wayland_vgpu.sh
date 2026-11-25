@@ -16,13 +16,24 @@ else
   echo "PASS: X11_RUNNING=0 (zero Xorg/Xwayland processes)"
 fi
 
+echo "=== NVIDIA X11 STRIP AUDIT ==="
+for xfile in /usr/share/applications/nvidia-settings.desktop /usr/bin/nvidia-settings /usr/bin/nvidia-xconfig \
+             /usr/lib64/xorg/modules/drivers/nvidia_drv.so /usr/lib/xorg/modules/drivers/nvidia_drv.so; do
+  if [[ -e "${xfile}" ]]; then
+    echo "WARN: NVIDIA X11 artifact present: ${xfile}"
+  else
+    echo "PASS: X11 artifact removed: ${xfile}"
+  fi
+done
+ls -1 /usr/share/egl/egl_external_platform.d/ 2>/dev/null || true
+
 echo "=== WAYLAND ENVIRONMENT ==="
 systemctl --user show-environment 2>/dev/null | grep -E '^(WAYLAND_DISPLAY|XDG_SESSION_TYPE|DISPLAY)=' || true
 
 echo "=== NVIDIA-SMI ==="
 nvidia-smi
 
-echo "=== CUDA 12.1/12.2 + NVENC 12.1 + NVDEC CODEC MATRIX ==="
+echo "=== CUDA 13.0 + NVENC 13.0 + NVDEC CODEC MATRIX ==="
 python3 - <<'PY'
 import ctypes
 

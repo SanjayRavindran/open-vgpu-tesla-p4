@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Live verification harness for Windows 11 24H2 + NVIDIA GRID 539.72 Pascal vGPU.
+# Live verification harness for Windows 11 24H2 + NVIDIA GRID 582.99 WHQL Pascal vGPU.
 $ErrorActionPreference = "Continue"
 
 Write-Output "=== WINDOWS & GPU PNP DEVICE ==="
@@ -9,7 +9,7 @@ Get-PnpDevice -Class Display | Select-Object Status, FriendlyName, InstanceId | 
 Write-Output "=== NVIDIA-SMI ==="
 & "C:\Windows\System32\nvidia-smi.exe"
 
-Write-Output "=== CUDA 12.1/12.2 + NVENC 12.1 + NVDEC CODEC MATRIX ==="
+Write-Output "=== CUDA 13.0 + NVENC 13.0 + NVDEC CODEC MATRIX ==="
 $cs = @'
 using System;
 using System.Runtime.InteropServices;

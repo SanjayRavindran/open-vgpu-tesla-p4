@@ -1,6 +1,6 @@
 /*
  * Clean-room open-source NVML implementation (libopen-nvidia-ml.so / libnvidia-ml.so.1)
- * For NVIDIA Tesla P4 (GP104GL) 535.309.01-vgpu-kvm Host & Guest Telemetry.
+ * For NVIDIA Tesla P4 (GP104GL) 580.196.09-vgpu-kvm Host & Guest Telemetry.
  *
  * SPDX-License-Identifier: MIT OR GPL-2.0-only
  */
@@ -1225,64 +1225,64 @@ nvmlReturn_t nvmlDeviceGetHostVgpuMode(nvmlDevice_t device, nvmlHostVgpuMode_t *
 
 nvmlReturn_t nvmlDeviceGetVirtualizationMode(nvmlDevice_t device, nvmlGpuVirtualizationMode_t *pVirtualMode) {
     if (!valid_device(device) || !pVirtualMode) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t mode = NVML_GPU_VIRTUALIZATION_MODE_HOST_VGPU;
-    rm_control(device->h_client, device->h_device, NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE, &mode, sizeof(mode));
-    *pVirtualMode = (nvmlGpuVirtualizationMode_t)mode;
+    uint32_t mode_r580[2] = { NVML_GPU_VIRTUALIZATION_MODE_HOST_VGPU, 0U };
+    rm_control(device->h_client, device->h_device, NV0080_CTRL_CMD_GPU_GET_VIRTUALIZATION_MODE, mode_r580, sizeof(mode_r580));
+    *pVirtualMode = (nvmlGpuVirtualizationMode_t)mode_r580[0];
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedVgpus(nvmlDevice_t device, unsigned int *vgpuCount, nvmlVgpuTypeId_t *vgpuTypeIds) {
     if (!valid_device(device) || !vgpuCount) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[66]; /* 264 bytes */
+    uint32_t buf[131]; /* R580: 0x20c bytes */
     memset(buf, 0, sizeof(buf));
     if (rm_control(device->h_client, device->h_vgpu_cfg, NVA081_CTRL_CMD_VGPU_CONFIG_GET_SUPPORTED_VGPU_TYPES, buf, sizeof(buf)) != 0) {
         return NVML_ERROR_NOT_SUPPORTED;
     }
-    uint32_t count = buf[1];
-    if (count > 64U) count = 64U;
+    uint32_t count = buf[2];
+    if (count > 128U) count = 128U;
     unsigned int cap = *vgpuCount;
     *vgpuCount = count;
     if (!vgpuTypeIds || cap < count) return NVML_ERROR_INSUFFICIENT_SIZE;
     for (uint32_t i = 0; i < count; i++) {
-        vgpuTypeIds[i] = buf[2 + i];
+        vgpuTypeIds[i] = buf[3 + i];
     }
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetCreatableVgpus(nvmlDevice_t device, unsigned int *vgpuCount, nvmlVgpuTypeId_t *vgpuTypeIds) {
     if (!valid_device(device) || !vgpuCount) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[66]; /* 264 bytes */
+    uint32_t buf[131]; /* R580: 0x20c bytes */
     memset(buf, 0, sizeof(buf));
     if (rm_control(device->h_client, device->h_vgpu_cfg, NVA081_CTRL_CMD_VGPU_CONFIG_GET_CREATABLE_VGPU_TYPES, buf, sizeof(buf)) != 0) {
         return NVML_ERROR_NOT_SUPPORTED;
     }
-    uint32_t count = buf[1];
-    if (count > 64U) count = 64U;
+    uint32_t count = buf[2];
+    if (count > 128U) count = 128U;
     unsigned int cap = *vgpuCount;
     *vgpuCount = count;
     if (count == 0) return NVML_SUCCESS;
     if (!vgpuTypeIds || cap < count) return NVML_ERROR_INSUFFICIENT_SIZE;
     for (uint32_t i = 0; i < count; i++) {
-        vgpuTypeIds[i] = buf[2 + i];
+        vgpuTypeIds[i] = buf[3 + i];
     }
     return NVML_SUCCESS;
 }
 
-static int query_vgpu_type_info(nvmlVgpuTypeId_t vgpuTypeId, uint8_t *out_4960) {
+static int query_vgpu_type_info(nvmlVgpuTypeId_t vgpuTypeId, uint8_t *out_5432) {
     if (!g_nvml_init_count || g_device_count == 0) return -1;
-    memset(out_4960, 0, 4960U);
-    *(uint32_t *)&out_4960[0] = vgpuTypeId;
+    memset(out_5432, 0, 0x1538U);
+    *(uint32_t *)&out_5432[0] = vgpuTypeId;
     return rm_control(g_devices[0].h_client, g_devices[0].h_vgpu_cfg,
-                      NVA081_CTRL_CMD_VGPU_CONFIG_GET_VGPU_TYPE_INFO, out_4960, 4960U);
+                      NVA081_CTRL_CMD_VGPU_CONFIG_GET_VGPU_TYPE_INFO, out_5432, 0x1538U);
 }
 
 nvmlReturn_t nvmlVgpuTypeGetName(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeName, unsigned int *size) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!size) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
     const char *s = (const char *)&buf[0x0c];
-    size_t len = strnlen(s, 31);
+    size_t len = strnlen(s, 63);
     if (!vgpuTypeName || *size <= len) {
         *size = (unsigned int)(len + 1);
         return NVML_ERROR_INSUFFICIENT_SIZE;
@@ -1296,10 +1296,10 @@ nvmlReturn_t nvmlVgpuTypeGetName(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeName
 nvmlReturn_t nvmlVgpuTypeGetClass(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeClass, unsigned int *size) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!size) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    const char *s = (const char *)&buf[0x2c];
-    size_t len = strnlen(s, 31);
+    const char *s = (const char *)&buf[0x4c];
+    size_t len = strnlen(s, 63);
     if (!vgpuTypeClass || *size <= len) {
         *size = (unsigned int)(len + 1);
         return NVML_ERROR_INSUFFICIENT_SIZE;
@@ -1313,28 +1313,28 @@ nvmlReturn_t nvmlVgpuTypeGetClass(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeCla
 nvmlReturn_t nvmlVgpuTypeGetDeviceID(nvmlVgpuTypeId_t vgpuTypeId, unsigned long long *deviceID, unsigned long long *subsystemID) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!deviceID || !subsystemID) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
     *deviceID = 0x1bb310deULL;
-    *subsystemID = 0x120610deULL;
+    *subsystemID = 0x11d810deULL;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlVgpuTypeGetFramebufferSize(nvmlVgpuTypeId_t vgpuTypeId, unsigned long long *fbSize) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!fbSize) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    *fbSize = *(uint64_t *)&buf[0x188];
+    *fbSize = *(uint64_t *)&buf[0x1c8];
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlVgpuTypeGetNumDisplayHeads(nvmlVgpuTypeId_t vgpuTypeId, unsigned int *numDisplayHeads) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!numDisplayHeads) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    *numDisplayHeads = *(uint32_t *)&buf[0x150];
+    *numDisplayHeads = *(uint32_t *)&buf[0x190];
     return NVML_SUCCESS;
 }
 
@@ -1342,19 +1342,19 @@ nvmlReturn_t nvmlVgpuTypeGetResolution(nvmlVgpuTypeId_t vgpuTypeId, unsigned int
     (void)displayIndex;
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!xdim || !ydim) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    *xdim = *(uint32_t *)&buf[0x154];
-    *ydim = *(uint32_t *)&buf[0x158];
+    *xdim = *(uint32_t *)&buf[0x194];
+    *ydim = *(uint32_t *)&buf[0x198];
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlVgpuTypeGetLicense(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeLicenseString, unsigned int size) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!vgpuTypeLicenseString || size == 0) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    const char *s = (const char *)&buf[0x6c];
+    const char *s = (const char *)&buf[0x10c];
     if (!s[0]) s = "GRID-Virtual-WS,2.0";
     snprintf(vgpuTypeLicenseString, size, "%s", s);
     return NVML_SUCCESS;
@@ -1363,17 +1363,17 @@ nvmlReturn_t nvmlVgpuTypeGetLicense(nvmlVgpuTypeId_t vgpuTypeId, char *vgpuTypeL
 nvmlReturn_t nvmlVgpuTypeGetFrameRateLimit(nvmlVgpuTypeId_t vgpuTypeId, unsigned int *frameRateLimit) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!frameRateLimit) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    *frameRateLimit = *(uint32_t *)&buf[0x160];
+    *frameRateLimit = *(uint32_t *)&buf[0x1a0];
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlVgpuTypeGetMaxInstances(nvmlDevice_t device, nvmlVgpuTypeId_t vgpuTypeId, unsigned int *vgpuInstanceCount) {
     if (!valid_device(device) || !vgpuInstanceCount) return NVML_ERROR_INVALID_ARGUMENT;
-    uint8_t buf[4960];
+    uint8_t buf[0x1538];
     if (query_vgpu_type_info(vgpuTypeId, buf) != 0) return NVML_ERROR_NOT_FOUND;
-    *vgpuInstanceCount = *(uint32_t *)&buf[0x14c];
+    *vgpuInstanceCount = *(uint32_t *)&buf[0x18c];
     return NVML_SUCCESS;
 }
 

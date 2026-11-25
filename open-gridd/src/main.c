@@ -236,6 +236,8 @@ int main(int argc, char **argv) {
                 uint8_t target_rm_state = (exp_ep > 0U && rm_state == GRIDD_LICENSE_STATE_LICENSED)
                                           ? (uint8_t)GRIDD_LICENSE_STATE_TRIAL_OR_UNSPECIFIED
                                           : (uint8_t)rm_state;
+                bool reboot_req = false;
+                gridd_rm_enable_feature(&rm, mapped_feat, NULL, &reboot_req);
                 gridd_rm_set_license_status(&rm, mapped_feat, exp_ep, target_rm_state);
                 const char *srv = gridd_lm_get_primary_url(&lm);
                 LOG_N("License acquired successfully. (Info: %s, %s; Expiry epoch: %u)",

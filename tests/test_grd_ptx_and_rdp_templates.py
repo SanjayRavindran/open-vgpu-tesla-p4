@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Unit tests for GRD PTX patcher, 2-VM RDP profiles, Selkies 10-bit 4:4:4 Compose config, shell scripts, and disclaimer."""
+"""Unit tests for R580 helper tools, 2-VM RDP profiles, Selkies 10-bit 4:4:4 Compose config, shell scripts, and disclaimer."""
 
+import importlib.util
 import shutil
 import subprocess
 import tempfile
@@ -10,14 +11,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-class TestGrdPtxRdpAndScripts(unittest.TestCase):
+class TestR580HelpersRdpAndScripts(unittest.TestCase):
     def test_shell_scripts_pass_bash_syntax(self):
         bash = shutil.which("bash")
         if not bash:
             self.skipTest("bash not installed on this platform")
         scripts = [
             REPO_ROOT / "scripts" / "extract_proprietary_blobs.sh",
-            REPO_ROOT / "scripts" / "patch_grd_ptx_535.sh",
             REPO_ROOT / "scripts" / "setup_selkies_pixelflux_vgpu.sh",
             REPO_ROOT / "scripts" / "start_vgpu_vms.sh",
             REPO_ROOT / "tests" / "live_verify_linux_wayland_vgpu.sh",
@@ -27,29 +27,55 @@ class TestGrdPtxRdpAndScripts(unittest.TestCase):
             r = subprocess.run([bash, "-n", str(s)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"bash -n failed for {s}: {r.stderr}")
 
-    def test_patch_grd_ptx_535_downgrades_and_is_idempotent(self):
-        bash = shutil.which("bash")
-        if not bash:
-            self.skipTest("bash not installed on this platform")
-        script = REPO_ROOT / "scripts" / "patch_grd_ptx_535.sh"
+    def test_patch_r580_guest_nv_pci_patches_and_is_idempotent(self):
+        tool = REPO_ROOT / "tools" / "patch_r580_guest_nv_pci.py"
+        spec = importlib.util.spec_from_file_location("patch_r580_guest_nv_pci", tool)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fixture = (
+            "    if (!nv_lock_init_locks(sp, nv))\n"
+            "        goto err_not_supported;\n\n"
+            "    if ((rm_is_supported_device(sp, nv)) != NV_OK)\n"
+            "        goto err_not_supported;\n\n"
+            "    if (!rm_init_private_state(sp, nv))\n"
+        )
         with tempfile.TemporaryDirectory() as td:
-            ptx = Path(td) / "grd-cuda-avc-utils_30.ptx"
-            ptx.write_text(".version 8.7\n.target sm_30\n.address_size 64\n", encoding="utf-8")
+            kdir = Path(td) / "kernel"
+            (kdir / "nvidia").mkdir(parents=True)
+            nv_pci = kdir / "nvidia" / "nv-pci.c"
+            nv_pci.write_text(fixture, encoding="utf-8")
 
-            r1 = subprocess.run([bash, str(script), str(ptx)], capture_output=True, text=True)
-            self.assertEqual(r1.returncode, 0, r1.stderr)
-            self.assertIn(".version 8.0", ptx.read_text(encoding="utf-8"))
-            self.assertTrue((Path(td) / "grd-cuda-avc-utils_30.ptx.orig").exists())
+            changed1, _ = mod.patch_nv_pci(kdir)
+            self.assertTrue(changed1)
+            txt = nv_pci.read_text(encoding="utf-8")
+            self.assertIn("pci_dev->vendor == 0x10de && pci_dev->device == 0x1bb3", txt)
+            self.assertTrue((kdir / "nvidia" / "nv-pci.c.orig").is_file())
 
-            r2 = subprocess.run([bash, str(script), str(ptx)], capture_output=True, text=True)
-            self.assertEqual(r2.returncode, 0, r2.stderr)
-            self.assertIn("No patch needed", r2.stdout)
+            changed2, msg2 = mod.patch_nv_pci(kdir)
+            self.assertFalse(changed2)
+            self.assertIn("No patch needed", msg2)
 
-            ptx2 = Path(td) / "old.ptx"
-            ptx2.write_text(".version 8.2\n.target sm_61\n", encoding="utf-8")
-            r3 = subprocess.run([bash, str(script), str(ptx2)], capture_output=True, text=True)
-            self.assertEqual(r3.returncode, 0, r3.stderr)
-            self.assertIn(".version 8.2", ptx2.read_text(encoding="utf-8"))
+    def test_patch_r580_vgpu_config_xml_injects_and_is_idempotent(self):
+        tool = REPO_ROOT / "tools" / "patch_r580_vgpu_config_xml.py"
+        spec = importlib.util.spec_from_file_location("patch_r580_vgpu_config_xml", tool)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        minimal_xml = '<?xml version="1.0" encoding="utf-8"?>\n<vgpuconfig>\n</vgpuconfig>\n'
+        with tempfile.TemporaryDirectory() as td:
+            xml_path = Path(td) / "vgpuConfig.xml"
+            xml_path.write_text(minimal_xml, encoding="utf-8")
+
+            changed1, _ = mod.patch_vgpu_config(xml_path)
+            self.assertTrue(changed1)
+            patched = xml_path.read_text(encoding="utf-8")
+            self.assertIn('name="GRID P4-4Q"', patched)
+            self.assertIn('subsystemId="0x11D8"', patched)
+            self.assertIn('deviceId="0x1BB3"', patched)
+
+            changed2, _ = mod.patch_vgpu_config(xml_path)
+            self.assertFalse(changed2)
 
     def test_rdp_profiles_valid_two_vm_focus_and_no_embedded_passwords(self):
         rdp_dir = REPO_ROOT / "rdp"

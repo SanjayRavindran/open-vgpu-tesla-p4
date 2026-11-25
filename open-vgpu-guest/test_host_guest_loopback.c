@@ -382,7 +382,7 @@ int main(void)
     assert(st == 0x56U);
 
     /* 2) Guest VGX 0x23.0x05 handshake (0x01 + 0x40) */
-    assert(open_vgpu_guest_handshake(&guest, "535.309.01", "r535_00", &st) == 0 && st == 0U);
+    assert(open_vgpu_guest_handshake(&guest, "580.196.07", "r580_00", &st) == 0 && st == 0U);
 
     /* 3) Guest pulls full 17-chunk 0x50 VGPU_STATIC_INFO (67,416 B) */
     uint8_t *blob_50 = (uint8_t *)calloc(1U, OPEN_VGPU_GUEST_STATIC_INFO_LEN);
@@ -394,10 +394,10 @@ int main(void)
     assert(s_info.vgpu_type_id == 65U);
     assert(s_info.pci_device_id == 0x1bb3U);
     assert(s_info.frl_fps == 60U);
-    assert(strcmp(s_info.host_driver_ver, "535.309.01") == 0);
+    assert(strcmp(s_info.host_driver_ver, NV_VGPU_DRIVER_VERSION_STR) == 0);
     assert(strcmp(s_info.profile_name, "GRID P4-4Q") == 0);
-    assert(strcmp(s_info.guest_driver_ver, "535.309.01") == 0);
-    assert(strcmp(s_info.guest_branch_ver, "r535_00") == 0);
+    assert(strcmp(s_info.guest_driver_ver, "580.196.07") == 0);
+    assert(strcmp(s_info.guest_branch_ver, "r580_00") == 0);
     free(blob_50);
 
     /* 4) Guest pulls full 8-chunk 0x9c GR_STATIC_INFO (31,536 B) */

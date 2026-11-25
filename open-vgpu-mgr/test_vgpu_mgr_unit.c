@@ -240,14 +240,18 @@ static uint32_t mock_emul_cb(void *priv, uint32_t is_write, uint32_t emul_space,
 static void test_abi_and_error_table(void)
 {
     assert(sizeof(NV_VGPU_DEV_IOCTL_PARAMS) == 16U);
-    assert(sizeof(type_info_t) == 60U);
+    assert(sizeof(type_info_t) == 0x5cU);
     assert(sizeof(NV_VFIO_VGPU_CTLDEV_SET_TYPES_INFO_PARAMS) == 24U);
-    assert(sizeof(NV_VFIO_VGPU_CTLDEV_GET_EVENT_DATA_PARAMS) == 0x52cU);
-    assert(sizeof(NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA_PARAMS) == 0x210U);
+    assert(sizeof(NV_VFIO_VGPU_CTLDEV_GET_EVENT_DATA_PARAMS) == 0x634U);
+    assert(sizeof(NV_VFIO_VGPU_CTLDEV_SET_EVENT_DATA_PARAMS) == 0x41cU);
+    assert(sizeof(NV_VFIO_VGPU_BAR_INFO_SET_DATA_PARAMS) == 0x80U);
+    assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_SUPPORTED_VGPU_TYPES_PARAMS) == 0x20cU);
+    assert(sizeof(NVA081_CTRL_VGPU_CONFIG_GET_VGPU_TYPE_INFO_PARAMS) == 0x1538U);
+    assert(sizeof(NV0000_CTRL_VGPU_CREATE_DEVICE_PARAMS) == 0x28U);
+    assert(sizeof(NV0000_CTRL_VGPU_GET_INSTANCES_PARAMS) == 0x40cU);
     assert(sizeof(NV_VFIO_VGPU_PIN_PAGES_PARAMS) == 0x18U);
     assert(sizeof(NV_VFIO_VGPU_UNPIN_PAGES_PARAMS) == 0x10U);
     assert(sizeof(NV_VFIO_VGPU_REG_ACCESS_GET_DATA_PARAMS) == 0x18U);
-    assert(sizeof(NV_VFIO_VGPU_BAR_INFO_SET_DATA_PARAMS) == 0x78U);
     assert(sizeof(NV0080_ALLOC_PARAMETERS) == 0x38U);
     assert(offsetof(NV0080_ALLOC_PARAMETERS, deviceId) == 0U);
     assert(offsetof(NV0080_ALLOC_PARAMETERS, hClientShare) == 4U);

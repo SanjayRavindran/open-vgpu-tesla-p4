@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import unittest
@@ -142,6 +143,7 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
         txt = ps1.read_text(encoding="utf-8")
         for needle in (
             "$DlsUrl",
+            "$PatchedNvxdapixPath",
             "/-/client-token",
             "FeatureType",
             "AVCHardwareEncodePreferred",
@@ -150,6 +152,13 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
         ):
             self.assertIn(needle, txt)
         self.assertNotIn("sanjay", txt.lower())
+
+        for folder in ("docs", ".agents"):
+            base = ROOT / folder
+            if base.is_dir():
+                for md in base.rglob("*.md"):
+                    txt_md = md.read_text(encoding="utf-8")
+                    self.assertIsNone(re.search(r"\bsanjay\b", txt_md, re.I), f"Hardcoded password leaked in {md}")
 
     def test_repro_shell_scripts_syntax_and_dry_run_on_posix(self):
         scripts = [
@@ -207,8 +216,8 @@ class ReproScriptsAndOpenDaemonsTests(unittest.TestCase):
                 "--dry-run",
             ],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "rhel", "--dry-run", "--with-selkies"],
-            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "almalinux", "--dry-run", "--with-selkies", "--with-open-gridd"],
-            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "rocky", "--dry-run", "--with-selkies"],
+            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "almalinux", "--grid-580-run", "/tmp/580.run", "--strip-x11", "--dry-run", "--with-selkies"],
+            ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "rocky", "--keep-x11", "--dry-run", "--with-selkies"],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "ubuntu", "--dry-run", "--with-selkies"],
             ["bash", str(ROOT / "scripts" / "provision_linux_vgpu_guest.sh"), "--distro", "debian", "--dry-run", "--with-selkies"],
             ["bash", str(ROOT / "scripts" / "provision_alma_guest.sh"), "--dry-run", "--with-selkies"],

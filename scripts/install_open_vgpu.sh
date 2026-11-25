@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Unified Host & Guest Installer for open-vgpu-tesla-p4 (535.309.01-vgpu-kvm + Open Host Daemons & Hybrid Guests)
+# Unified Host & Guest Installer for open-vgpu-tesla-p4 (R580: 580.196.09 Host + 580.196.07 Linux + 582.99 Windows)
 # Supports:
 #   --role host           Ubuntu 24.04/26.04 KVM or Proxmox VE 8/9 host:
-#                         - DKMS nvidia-vgpu-kvm/535.309.01 (nvidia.ko + open MIT nvidia-vgpu-vfio.ko)
-#                         - All 6 clean-room open-source host binaries:
-#                             1. open-nvidia-vgpud (Rust)
-#                             2. libopen-vgxcfg.so (C)
-#                             3. open-nvidia-xid-logd (C)
-#                             4. open-nvidia-vgpu-mgr (C)
-#                             5. open-nvidia-smi (C)
-#                             6. libopen-nvidia-ml.so (C)
+#                         - DKMS nvidia-vgpu-kvm/580.196.09 (0xc85b7 bypass + 0x11D8 vgpuConfig.xml + open MIT nvidia-vgpu-vfio.ko)
+#                         - All clean-room open-source host artifacts in /opt/nvidia-vgpu-580
 #                         - Optional FastAPI-DLS (--with-dls docker|systemd)
-#   --role guest-linux    AlmaLinux 10.3 / RHEL 10 / Ubuntu Linux vGPU guest:
-#                         - 535.309.01 GRID guest driver (with Linux 6.12+/7.0+ compat patcher)
-#                         - 620.70.06 Wayland/GBM userspace overlay (Pure Wayland --no-x11 --headless)
-#                         - GTK4 GSK_RENDERER=ngl + GNOME Remote Desktop CUDA PTX 8.0 patch (:3389)
-#                         - FastAPI-DLS client token + optional Selkies PixelFlux 10-bit 4:4:4 (--with-selkies)
-#   --role guest-windows  Prints or executes the Windows 11 24H2 WDDM 3.1 (539.72 WHQL) + RDP 0x200d fix provisioning workflow
+#   --role guest-linux    AlmaLinux 10.3 / RHEL 10 / Ubuntu / Debian vGPU guest (580.196.07 + nv-pci.c patch + X11 strip + CDI)
+#   --role guest-windows  Windows 11 24H2 WDDM 3.1 (582.99 WHQL + nvxdapix.dll patch + RDP 0x200d fix) commands
 
 ROLE=""
 RUN_FILE=""
-GRID_535_RUN=""
-GRID_620_RUN=""
+GRID_580_RUN=""
+GRIDD_PATCHER=""
 DLS_MODE=""
 DLS_URL="https://192.168.1.24"
 RDP_USER="zero"
 RDP_PASS="${RDP_PASS:-}"
+KEEP_X11=0
 WITH_SELKIES=0
+WITH_OPEN_GRIDD=0
 DRY_RUN=0
 
 usage() {
@@ -36,21 +28,23 @@ usage() {
 Usage: install_open_vgpu.sh --role <host|guest-linux|guest-windows> [options]
 
 Roles:
-  --role host             Install DKMS 535.309.01-vgpu-kvm + all 6 open-source host daemons on Ubuntu KVM or Proxmox VE
-  --role guest-linux      Provision Linux vGPU guest (535.309.01 kernel + R620 Wayland/GBM + headless RDP + DLS + optional Selkies)
-  --role guest-windows    Display/run Windows 11 24H2 vGPU WDDM 3.1 (539.72 WHQL) provisioning commands
+  --role host             Install DKMS 580.196.09-vgpu-kvm + clean-room open-source host daemons on Ubuntu KVM or Proxmox VE
+  --role guest-linux      Provision R580 Linux vGPU guest (580.196.07 + nv-pci.c patch + pure Wayland X11 strip + DLS + Selkies)
+  --role guest-windows    Display Windows 11 24H2 vGPU (582.99 WHQL) provisioning commands
 
 Host Options (--role host):
-  --run-file <path>       Path to NVIDIA-Linux-x86_64-535.309.01-vgpu-kvm.run
+  --run-file <path>       Path to NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run
   --with-dls <mode>       Also install FastAPI-DLS license server ('docker' for Ubuntu KVM, 'systemd' for Proxmox VE)
   --dls-url <ip_or_url>   FastAPI-DLS IP/URL (default: https://192.168.1.24)
 
 Linux Guest Options (--role guest-linux):
-  --grid-535-run <path>   Path to NVIDIA-Linux-x86_64-535.309.01-grid.run
-  --grid-620-run <path>   Path to NVIDIA-Linux-x86_64-620.70.06-grid.run (Wayland/GBM overlay)
+  --grid-580-run <path>   Path to NVIDIA-Linux-x86_64-580.196.07-grid.run
+  --gridd-patcher <path>  Path to compiled gridd-unlock-patcher binary (patches /usr/bin/nvidia-gridd)
   --dls-url <url>         FastAPI-DLS URL (default: https://192.168.1.24)
   --rdp-user <user>       Wayland RDP username (default: zero)
   --rdp-pass <pass>       Wayland RDP password (or set RDP_PASS env var)
+  --keep-x11              Keep NVIDIA X11/Xorg/nvidia-settings files instead of stripping
+  --with-open-gridd       Also build and install clean-room open-gridd
   --with-selkies          Also install Docker CE + NVIDIA CDI + Selkies PixelFlux 10-bit 4:4:4
 
 Common Options:
@@ -61,18 +55,20 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --role)          ROLE="${2:-}"; shift 2 ;;
-    --run-file)      RUN_FILE="${2:-}"; shift 2 ;;
-    --grid-535-run)  GRID_535_RUN="${2:-}"; shift 2 ;;
-    --grid-620-run)  GRID_620_RUN="${2:-}"; shift 2 ;;
-    --with-dls)      DLS_MODE="${2:-}"; shift 2 ;;
-    --dls-url)       DLS_URL="${2:-}"; shift 2 ;;
-    --rdp-user)      RDP_USER="${2:-}"; shift 2 ;;
-    --rdp-pass)      RDP_PASS="${2:-}"; shift 2 ;;
-    --with-selkies)  WITH_SELKIES=1; shift ;;
-    --dry-run)       DRY_RUN=1; shift ;;
-    -h|--help)       usage; exit 0 ;;
-    *)               echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    --role)            ROLE="${2:-}"; shift 2 ;;
+    --run-file)        RUN_FILE="${2:-}"; shift 2 ;;
+    --grid-580-run)    GRID_580_RUN="${2:-}"; shift 2 ;;
+    --gridd-patcher)   GRIDD_PATCHER="${2:-}"; shift 2 ;;
+    --with-dls)        DLS_MODE="${2:-}"; shift 2 ;;
+    --dls-url)         DLS_URL="${2:-}"; shift 2 ;;
+    --rdp-user)        RDP_USER="${2:-}"; shift 2 ;;
+    --rdp-pass)        RDP_PASS="${2:-}"; shift 2 ;;
+    --keep-x11)        KEEP_X11=1; shift ;;
+    --with-open-gridd) WITH_OPEN_GRIDD=1; shift ;;
+    --with-selkies)    WITH_SELKIES=1; shift ;;
+    --dry-run)         DRY_RUN=1; shift ;;
+    -h|--help)         usage; exit 0 ;;
+    *)                 echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
@@ -96,18 +92,23 @@ case "$ROLE" in
 
   guest-linux)
     GUEST_ARGS=(--dls-url "$DLS_URL" --rdp-user "$RDP_USER")
-    [[ -n "$GRID_535_RUN" ]] && GUEST_ARGS+=(--grid-535-run "$GRID_535_RUN")
-    [[ -n "$GRID_620_RUN" ]] && GUEST_ARGS+=(--grid-620-run "$GRID_620_RUN")
+    [[ -n "$GRID_580_RUN" ]] && GUEST_ARGS+=(--grid-580-run "$GRID_580_RUN")
+    [[ -n "$GRIDD_PATCHER" ]] && GUEST_ARGS+=(--gridd-patcher "$GRIDD_PATCHER")
     [[ -n "$RDP_PASS" ]] && GUEST_ARGS+=(--rdp-pass "$RDP_PASS")
+    [[ "$KEEP_X11" -eq 1 ]] && GUEST_ARGS+=(--keep-x11)
+    [[ "$WITH_OPEN_GRIDD" -eq 1 ]] && GUEST_ARGS+=(--with-open-gridd)
     [[ "$WITH_SELKIES" -eq 1 ]] && GUEST_ARGS+=(--with-selkies)
     [[ "$DRY_RUN" -eq 1 ]] && GUEST_ARGS+=(--dry-run)
     bash "$SCRIPT_DIR/provision_linux_vgpu_guest.sh" "${GUEST_ARGS[@]}"
     ;;
 
   guest-windows)
-    echo "=== Windows 11 24H2 vGPU Guest Provisioning (539.72 WHQL WDDM 3.1) ==="
+    echo "=== Windows 11 24H2 vGPU Guest Provisioning (582.99 WHQL, SUBSYS_11D810DE) ==="
     echo "Run inside an elevated PowerShell prompt on the Windows 11 VM:"
-    echo "  powershell -ExecutionPolicy Bypass -File scripts\\provision_win11_guest.ps1 -DlsUrl ${DLS_URL}"
+    echo "  powershell -ExecutionPolicy Bypass -File scripts\\provision_win11_guest.ps1 \\"
+    echo "    -DlsUrl ${DLS_URL} \\"
+    echo "    -DriverInstallerPath C:\\path\\to\\582.99_grid_win10_win11_server2022_server_2025_dch_64bit_international.exe \\"
+    echo "    -PatchedNvxdapixPath C:\\path\\to\\nvxdapix_patched.dll"
     echo "For unattended ISO installation, use: scripts/templates/win11-autounattend.xml"
     ;;
 

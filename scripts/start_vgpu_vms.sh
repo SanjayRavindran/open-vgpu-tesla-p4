@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 # 50/50 CPU (4 vCPU each on 8-thread host) + 50/50 GPU (GRID P4-4Q / nvidia-65, 4096 MiB VRAM each)
-# Launches ONLY AlmaLinux 10.3 Pure Wayland (192.168.1.68) and Windows 11 24H2 WDDM (192.168.1.65)
-# on the UEFI Coreboot Tesla P4 KVM host (192.168.1.24).
+# Launches AlmaLinux 10.3 Pure Wayland (192.168.1.68) and Windows 11 24H2 WDDM (192.168.1.74 DHCP / 192.168.1.65 static fallback)
+# on the UEFI Coreboot Tesla P4 KVM host (192.168.1.24, 580.196.09-vgpu-kvm).
 set -euo pipefail
 
 PCI_BDF="${PCI_BDF:-0000:01:00.0}"

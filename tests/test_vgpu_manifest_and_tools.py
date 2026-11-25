@@ -55,11 +55,15 @@ class TestOpenPascalVgpuRepo(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("BLOB_MANIFEST.json", r.stdout)
 
-    def test_patch_535_guest_linux7_cli_help(self):
-        script = REPO_ROOT / "scripts" / "patch_535_guest_linux7.py"
-        r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("kernel_dir", r.stdout)
+    def test_patch_r580_tools_cli_help(self):
+        for rel, needle in (
+            ("patch_r580_guest_nv_pci.py", "kernel_dir"),
+            ("patch_r580_vgpu_config_xml.py", "vgpuConfig.xml"),
+        ):
+            script = REPO_ROOT / "tools" / rel
+            r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn(needle, r.stdout)
 
 
 if __name__ == "__main__":
