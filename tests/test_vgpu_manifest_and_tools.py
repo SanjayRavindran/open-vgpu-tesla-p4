@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -64,6 +65,51 @@ class TestOpenPascalVgpuRepo(unittest.TestCase):
             r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0)
             self.assertIn(needle, r.stdout)
+
+    def test_patch_r580_vfio_bar1_fault_idempotent_and_strict(self):
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import patch_r580_vfio_bar1_fault as vf_patch
+        finally:
+            sys.path.pop(0)
+
+        sample = (
+            "static NV_STATUS nv_vgpu_vfio_validate_map_request(void) {\n"
+            + vf_patch.OLD_VALIDATE_HEAD
+            + "    if (node)\n"
+            + vf_patch.OLD_VALIDATE_DUP
+            + "\n"
+            + vf_patch.OLD_VALIDATE_TAIL
+            + "\n}\n\n"
+            + vf_patch.OLD_FAULT_FN
+            + "\n\nstatic int nv_vgpu_vfio_mmap(void) {\n"
+            + vf_patch.OLD_MMAP_BAR1
+            + "\n}\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "nvidia-vgpu-vfio.c"
+            p.write_text(sample, encoding="utf-8")
+
+            r1 = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "patch_r580_vfio_bar1_fault.py"), str(p)],
+                                capture_output=True, text=True)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            patched = p.read_text(encoding="utf-8")
+            self.assertIn(vf_patch.MARKER, patched)
+            self.assertIn("vmf_insert_pfn_prot", patched)
+            self.assertIn("vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP)", patched)
+            self.assertNotIn("BAR1 guest address already mapped", patched)
+
+            r2 = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "patch_r580_vfio_bar1_fault.py"), str(p)],
+                                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertEqual(p.read_text(encoding="utf-8"), patched)
+
+            bad = Path(tmp) / "bad.c"
+            bad.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            r3 = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "patch_r580_vfio_bar1_fault.py"), str(bad)],
+                                capture_output=True, text=True)
+            self.assertNotEqual(r3.returncode, 0)
 
 
 if __name__ == "__main__":

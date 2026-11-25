@@ -122,6 +122,7 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                 snprintf((char *)&p[0x47], 24, "900-2G414-0000-001");
                 return 0;
             case 0x20801303U: /* FB_GET_INFO_V2 */
+                assert(c->paramsSize == 1028U);
                 if (u32[0] == 3U) {
                     u32[2] = 0x7f7cd4U; /* Free KiB: 8355028 */
                     u32[4] = 0x800000U; /* Total KiB: 8388608 (8192 MiB) */
@@ -131,13 +132,14 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                     u32[4] = 259904U;   /* BAR1 Free KiB: 254 MiB */
                 }
                 return 0;
-            case 0x20808513U: /* THERMAL_SYSTEM_EXECUTE */
+            case 0x20800513U: /* THERMAL_SYSTEM_EXECUTE */
                 u32[10] = 36U;
                 return 0;
             case 0x20808546U: /* THERMAL_GET_THRESHOLD */
                 u32[1] = (u32[0] == 0x16U) ? (94U << 8) : (91U << 8);
                 return 0;
             case 0x2080a613U: /* PWR_MONITOR_GET_STATUS */
+                assert(c->paramsSize == 16916U);
                 u32[2] = 10150U; /* 10.15 W */
                 return 0;
             case 0x2080a61dU: /* PWR_POLICY_GET_CONTROL */
@@ -145,11 +147,12 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                 u32[1] = 75000U; /* 75.00 W */
                 return 0;
             case 0x2080a618U: /* PWR_POLICY_GET_INFO */
-                u32[0x1b4 / 4] = 60000U;
-                u32[0x1b8 / 4] = 75000U;
-                u32[0x1bc / 4] = 75000U;
+                assert(c->paramsSize == 8620U);
+                u32[0x228 / 4] = 60000U;
+                u32[0x22c / 4] = 75000U;
+                u32[0x230 / 4] = 75000U;
                 return 0;
-            case 0x2080a068U: /* PERF_GET_CURRENT_PSTATE */
+            case 0x20802068U: /* PERF_GET_CURRENT_PSTATE */
                 u32[0] = 0x100U; /* P8 */
                 return 0;
             case 0x20809004U: /* CLK_GET_INFO */
@@ -161,7 +164,7 @@ static int mock_rm_ioctl(int fd, unsigned long request, void *arg) {
                 u32[2] = 7U; /* GPU util 7% */
                 u32[6] = 3U; /* Mem util 3% */
                 return 0;
-            case 0x2080a087U: /* PERF_GET_VID_ENG_UTIL */
+            case 0x20802087U: /* PERF_GET_VID_ENG_UTIL */
                 u32[1] = (u32[0] == 1U) ? 12U : 5U;
                 u32[2] = 167000U;
                 return 0;
@@ -251,6 +254,9 @@ static void test_nvml_core_telemetry(void) {
     assert(strcmp(drv, "580.196.09") == 0);
     assert(nvmlSystemGetNVMLVersion(nvmlv, sizeof(nvmlv)) == NVML_SUCCESS);
     assert(strcmp(nvmlv, "12.580.196.09") == 0);
+
+    int cuda_ver = 0;
+    assert(nvmlSystemGetCudaDriverVersion(&cuda_ver) == NVML_SUCCESS && cuda_ver == 13000);
 
     unsigned int cnt = 0;
     assert(nvmlDeviceGetCount_v2(&cnt) == NVML_SUCCESS);

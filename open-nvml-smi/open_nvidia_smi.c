@@ -33,16 +33,25 @@ static void print_timestamp_line(void) {
     printf("%s       \n", tbuf);
 }
 
+static void format_cuda_version(char *buf, size_t len) {
+    int cuda_ver = 13000;
+    if (nvmlSystemGetCudaDriverVersion(&cuda_ver) != NVML_SUCCESS || cuda_ver <= 0) {
+        cuda_ver = 13000;
+    }
+    snprintf(buf, len, "%d.%d", cuda_ver / 1000, (cuda_ver % 1000) / 10);
+}
+
 static int print_default_table(int filter_idx) {
-    char drv_ver[80] = {0};
+    char drv_ver[80] = {0}, cuda_str[16] = {0};
     nvmlSystemGetDriverVersion(drv_ver, sizeof(drv_ver));
+    format_cuda_version(cuda_str, sizeof(cuda_str));
     unsigned int dev_count = 0;
     nvmlDeviceGetCount_v2(&dev_count);
 
     print_timestamp_line();
     printf("+---------------------------------------------------------------------------------------+\n");
     printf("| NVIDIA-SMI %-22s Driver Version: %-13s CUDA Version: %-7s |\n",
-           drv_ver, drv_ver, "12.2");
+           drv_ver, drv_ver, cuda_str);
     printf("|-----------------------------------------+----------------------+----------------------+\n");
     printf("| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n");
     printf("| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n");
@@ -142,8 +151,9 @@ static int print_list_gpus(int filter_idx) {
 }
 
 static int print_query_log(int filter_idx) {
-    char drv_ver[80] = {0};
+    char drv_ver[80] = {0}, cuda_str[16] = {0};
     nvmlSystemGetDriverVersion(drv_ver, sizeof(drv_ver));
+    format_cuda_version(cuda_str, sizeof(cuda_str));
     unsigned int dev_count = 0;
     nvmlDeviceGetCount_v2(&dev_count);
 
@@ -156,7 +166,7 @@ static int print_query_log(int filter_idx) {
     printf("\n==============NVSMI LOG==============\n\n");
     printf("Timestamp                                 : %s\n", tbuf);
     printf("Driver Version                            : %s\n", drv_ver);
-    printf("CUDA Version                              : 12.2\n");
+    printf("CUDA Version                              : %s\n", cuda_str);
     printf("vGPU Driver Capability\n");
     printf("        Heterogenous Multi-vGPU           : Supported\n\n");
     printf("Attached GPUs                             : %u\n", dev_count);

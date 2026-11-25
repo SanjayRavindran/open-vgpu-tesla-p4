@@ -65,12 +65,12 @@ _Static_assert(sizeof(nv_rm_api_version_t) == 72, "nv_rm_api_version_t must be 7
 #define NV2080_CTRL_CMD_GPU_GET_PID_INFO                      0x2080018eU
 #define NV2080_CTRL_CMD_FB_GET_INFO_V2                        0x20801303U
 #define NV2080_CTRL_CMD_BUS_GET_PCI_INFO                      0x20801801U
-#define NV2080_CTRL_CMD_THERMAL_SYSTEM_EXECUTE                0x20808513U
+#define NV2080_CTRL_CMD_THERMAL_SYSTEM_EXECUTE                0x20800513U
 #define NV2080_CTRL_CMD_THERMAL_GET_THRESHOLD                 0x20808546U
 #define NV2080_CTRL_CMD_CLK_GET_INFO                          0x20809004U
 #define NV2080_CTRL_CMD_CLK_GET_EXTENDED_INFO                 0x20809064U
-#define NV2080_CTRL_CMD_PERF_GET_CURRENT_PSTATE               0x2080a068U
-#define NV2080_CTRL_CMD_PERF_GET_VID_ENG_UTIL                 0x2080a087U
+#define NV2080_CTRL_CMD_PERF_GET_CURRENT_PSTATE               0x20802068U
+#define NV2080_CTRL_CMD_PERF_GET_VID_ENG_UTIL                 0x20802087U
 #define NV2080_CTRL_CMD_PERF_GET_CLK_DOMAINS_SAMPLE           0x2080a097U
 #define NV2080_CTRL_CMD_PMGR_PWR_MONITOR_GET_INFO             0x2080a612U
 #define NV2080_CTRL_CMD_PMGR_PWR_MONITOR_GET_STATUS           0x2080a613U
@@ -485,7 +485,7 @@ nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
     if (!g_nvml_init_count) return NVML_ERROR_UNINITIALIZED;
     if (!cudaDriverVersion) return NVML_ERROR_INVALID_ARGUMENT;
-    *cudaDriverVersion = 12020;
+    *cudaDriverVersion = 13000;
     return NVML_SUCCESS;
 }
 
@@ -704,7 +704,7 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) {
     if (!valid_device(device) || !memory) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[109]; /* 436 bytes */
+    uint32_t buf[257]; /* 1028 bytes (R580 FB_GET_INFO_V2) */
     memset(buf, 0, sizeof(buf));
     buf[0] = 3;      /* fbInfoListSize = 3 */
     buf[1] = 0x16U;  /* NV2080_CTRL_FB_INFO_INDEX_HEAP_FREE */
@@ -723,7 +723,7 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) 
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *memory) {
     if (!valid_device(device) || !memory) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[109]; /* 436 bytes */
+    uint32_t buf[257]; /* 1028 bytes (R580 FB_GET_INFO_V2) */
     memset(buf, 0, sizeof(buf));
     buf[0] = 3;
     buf[1] = 0x16U;
@@ -744,7 +744,7 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *me
 
 nvmlReturn_t nvmlDeviceGetBAR1MemoryInfo(nvmlDevice_t device, nvmlBAR1Memory_t *bar1Memory) {
     if (!valid_device(device) || !bar1Memory) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[109]; /* 436 bytes */
+    uint32_t buf[257]; /* 1028 bytes (R580 FB_GET_INFO_V2) */
     memset(buf, 0, sizeof(buf));
     buf[0] = 2;
     buf[1] = 0x05U;  /* NV2080_CTRL_FB_INFO_INDEX_BAR1_SIZE */
@@ -808,13 +808,15 @@ nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
 
 nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
     if (!valid_device(device) || !power) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[773]; /* 3092 bytes */
-    memset(buf, 0, sizeof(buf));
+    uint32_t *buf = (uint32_t *)calloc(4229, sizeof(uint32_t)); /* 16916 bytes (R580 PWR_MONITOR_GET_STATUS) */
+    if (!buf) return NVML_ERROR_MEMORY;
     buf[1] = 0x0c9fU;
-    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_MONITOR_GET_STATUS, buf, sizeof(buf)) != 0) {
+    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_MONITOR_GET_STATUS, buf, 4229U * (uint32_t)sizeof(uint32_t)) != 0) {
+        free(buf);
         return NVML_ERROR_NOT_SUPPORTED;
     }
     *power = buf[2]; /* milliwatts */
+    free(buf);
     return NVML_SUCCESS;
 }
 
@@ -844,24 +846,28 @@ nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *
 
 nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsigned int *defaultLimit) {
     if (!valid_device(device) || !defaultLimit) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[1736]; /* 6944 bytes */
-    memset(buf, 0, sizeof(buf));
-    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_POLICY_GET_INFO, buf, sizeof(buf)) != 0) {
+    uint32_t *buf = (uint32_t *)calloc(2155, sizeof(uint32_t)); /* 8620 bytes (R580 PWR_POLICY_GET_INFO) */
+    if (!buf) return NVML_ERROR_MEMORY;
+    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_POLICY_GET_INFO, buf, 2155U * (uint32_t)sizeof(uint32_t)) != 0) {
+        free(buf);
         return NVML_ERROR_NOT_SUPPORTED;
     }
-    *defaultLimit = buf[0x1b8 / 4];
+    *defaultLimit = buf[0x22c / 4];
+    free(buf);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, unsigned int *minLimit, unsigned int *maxLimit) {
     if (!valid_device(device) || !minLimit || !maxLimit) return NVML_ERROR_INVALID_ARGUMENT;
-    uint32_t buf[1736]; /* 6944 bytes */
-    memset(buf, 0, sizeof(buf));
-    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_POLICY_GET_INFO, buf, sizeof(buf)) != 0) {
+    uint32_t *buf = (uint32_t *)calloc(2155, sizeof(uint32_t)); /* 8620 bytes (R580 PWR_POLICY_GET_INFO) */
+    if (!buf) return NVML_ERROR_MEMORY;
+    if (rm_control(device->h_client, device->h_subdevice, NV2080_CTRL_CMD_PMGR_PWR_POLICY_GET_INFO, buf, 2155U * (uint32_t)sizeof(uint32_t)) != 0) {
+        free(buf);
         return NVML_ERROR_NOT_SUPPORTED;
     }
-    *minLimit = buf[0x1b4 / 4];
-    *maxLimit = buf[0x1bc / 4];
+    *minLimit = buf[0x228 / 4];
+    *maxLimit = buf[0x230 / 4];
+    free(buf);
     return NVML_SUCCESS;
 }
 

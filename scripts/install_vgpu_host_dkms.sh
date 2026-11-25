@@ -150,6 +150,7 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] Extract ${RUN_FILE:-NVIDIA-Linux-x86_64-580.196.09-vgpu-kvm.run} -> ${DKMS_SRC}"
   echo "[dry-run] Patch _nv060499rm RSA check in nv-kernel.o_binary (0xc85b7) for Tesla P4 vgpuConfig.xml"
+  echo "[dry-run] Patch nvidia-vgpu-vfio.c BAR1 page-fault race via tools/patch_r580_vfio_bar1_fault.py"
   echo "[dry-run] Patch /usr/share/nvidia/vgpu/vgpuConfig.xml via tools/patch_r580_vgpu_config_xml.py (10de:1bb3 / SUBSYS_11D8)"
   echo "[dry-run] Write ${DKMS_SRC}/dkms.conf (nvidia + nvidia-vgpu-vfio -> /updates/dkms)"
   echo "[dry-run] dkms add -m ${PKG_NAME} -v ${PKG_VER} && dkms build -m ${PKG_NAME} -v ${PKG_VER} && dkms install -m ${PKG_NAME} -v ${PKG_VER}"
@@ -189,6 +190,10 @@ with open(path, "r+b") as f:
     f.seek(off)
     f.write(patch)
 PY
+
+if [ -f "$REPO_ROOT/tools/patch_r580_vfio_bar1_fault.py" ]; then
+  python3 "$REPO_ROOT/tools/patch_r580_vfio_bar1_fault.py" "${DKMS_SRC}/nvidia-vgpu-vfio/nvidia-vgpu-vfio.c"
+fi
 
 cat >"${DKMS_SRC}/dkms.conf" <<EOF
 PACKAGE_NAME="${PKG_NAME}"
